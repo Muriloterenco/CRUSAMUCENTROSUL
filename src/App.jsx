@@ -52,6 +52,7 @@ const STATUS_LABEL = {
 };
 const TIPOS_ATENDIMENTO = ["APH", "TRANSPORTE", "RESGATE", "ORIENTAÇÃO"];
 const ORIGEM_LIGACAO = ["AMBIENTE DE LAZER", "AMBIENTE DE TRABALHO", "AMBIENTE ESCOLAR", "DOMICÍLIO", "EVENTOS DE MASSA", "AEROPORTO", "RODOVIA", "UNIDADE DE SAÚDE", "VIA PÚBLICA", "ZONA RURAL", "OUTROS"];
+const TIPOS_LEITO = ["UTI", "ENFERMARIA", "AVALIAÇÃO MÉDICA", "EXAME COMPLEMENTAR"];
 const CONDUTAS_MEDICAS = [
   { key: "USA", label: "USA" }, { key: "USB", label: "USB" },
   { key: "MOTOLANCIA", label: "Motolância" }, { key: "ORIENTACAO_MEDICA", label: "Orientação Médica" },
@@ -324,6 +325,7 @@ function OcorrenciaModal({ oc, onClose }) {
                 <div><span style={{ color: COLORS.textDim }}>Município:</span> {oc.tarm.municipio || "—"}</div>
                 <div><span style={{ color: COLORS.textDim }}>Unidade Destino:</span> {valorOutro(oc.tarm.destino, oc.tarm.destinoOutro) || "—"}</div>
                 <div><span style={{ color: COLORS.textDim }}>Nº AIH/Encaminhamento:</span> {oc.tarm.aih || "—"}</div>
+                {isT && <div><span style={{ color: COLORS.textDim }}>Tipo de Leito:</span> {oc.tarm.tipoLeito || "—"}</div>}
               </>
             ) : (
               <>
@@ -495,7 +497,7 @@ function LoginScreen({ modoRecuperacao }) {
 function TarmView({ ocorrencias, onNovaOcorrencia, onCancelarOcorrencia, now }) {
   const [form, setForm] = useState({
     tipoAtendimento: [], solicitante: "", telefone: "", endereco: "", bairro: "", municipio: "",
-    referencia: "", origem: "", origemOutro: "", destino: "", destinoOutro: "", aih: "",
+    referencia: "", origem: "", origemOutro: "", destino: "", destinoOutro: "", aih: "", tipoLeito: "",
     origemLigacao: "", origemLigacaoOutro: "",
     nomePaciente: "", idade: "", idadeUnidade: "anos", sexo: "", queixa: "",
   });
@@ -512,7 +514,7 @@ function TarmView({ ocorrencias, onNovaOcorrencia, onCancelarOcorrencia, now }) 
   const fila = ocorrencias.filter((o) => o.status === "aguardando_regulacao").sort((a, b) => new Date(a.criadoEm) - new Date(b.criadoEm));
 
   function limparForm() {
-    setForm({ tipoAtendimento: [], solicitante: "", telefone: "", endereco: "", bairro: "", municipio: "", referencia: "", origem: "", origemOutro: "", destino: "", destinoOutro: "", aih: "", origemLigacao: "", origemLigacaoOutro: "", nomePaciente: "", idade: "", idadeUnidade: "anos", sexo: "", queixa: "" });
+    setForm({ tipoAtendimento: [], solicitante: "", telefone: "", endereco: "", bairro: "", municipio: "", referencia: "", origem: "", origemOutro: "", destino: "", destinoOutro: "", aih: "", tipoLeito: "", origemLigacao: "", origemLigacaoOutro: "", nomePaciente: "", idade: "", idadeUnidade: "anos", sexo: "", queixa: "" });
   }
   function submeter() {
     const enderecoValido = modoUnidades ? form.origem : form.endereco;
@@ -587,7 +589,13 @@ function TarmView({ ocorrencias, onNovaOcorrencia, onCancelarOcorrencia, now }) 
           <CampoComOutros label="Unidade Destino" opcoes={UNIDADES_DESTINO} valor={form.destino} onChange={(v) => setForm((f) => ({ ...f, destino: v }))} outro={form.destinoOutro} onChangeOutro={(v) => setForm((f) => ({ ...f, destinoOutro: v }))} placeholderOutro="Unidade/hospital de destino" />
         )}
 
-        {modoUnidades && (
+        {modoUnidades && isTransporte && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <Field label="Número de AIH/Encaminhamento"><input style={inputStyle} value={form.aih} onChange={set("aih")} placeholder="Nº da AIH ou encaminhamento" /></Field>
+            <Field label="Tipo de Leito"><select style={inputStyle} value={form.tipoLeito} onChange={set("tipoLeito")}><option value="">Selecionar</option>{TIPOS_LEITO.map((t) => <option key={t} value={t}>{t}</option>)}</select></Field>
+          </div>
+        )}
+        {modoUnidades && !isTransporte && (
           <Field label="Número de AIH/Encaminhamento"><input style={inputStyle} value={form.aih} onChange={set("aih")} placeholder="Nº da AIH ou encaminhamento" /></Field>
         )}
 
