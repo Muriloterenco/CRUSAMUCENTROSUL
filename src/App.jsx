@@ -195,17 +195,10 @@ function SelecaoCancelamento({ motivo, setMotivo, outro, setOutro }) {
   return (
     <>
       <Field label="Motivo do cancelamento">
-        <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4 }}>
-          {MOTIVOS_CANCELAMENTO_ATENDIMENTO.map((m) => (
-            <button key={m} type="button" onClick={() => setMotivo(m)} style={{
-              flex: "0 0 auto", whiteSpace: "nowrap", padding: "9px 13px", borderRadius: 5, cursor: "pointer",
-              fontSize: 12.5, fontFamily: FONT_MONO, letterSpacing: 0.3,
-              background: motivo === m ? COLORS.vermelho : COLORS.panel,
-              color: motivo === m ? "#fff" : COLORS.textDim,
-              border: `1px solid ${motivo === m ? COLORS.vermelho : COLORS.line}`, fontWeight: 700,
-            }}>{m}</button>
-          ))}
-        </div>
+        <select style={inputStyle} value={motivo} onChange={(e) => setMotivo(e.target.value)}>
+          <option value="">Selecionar</option>
+          {MOTIVOS_CANCELAMENTO_ATENDIMENTO.map((m) => <option key={m} value={m}>{m}</option>)}
+        </select>
       </Field>
       {motivo === "OUTROS" && (
         <Field label="Descreva o motivo">
@@ -656,7 +649,7 @@ function TarmView({ ocorrencias, onNovaOcorrencia, onCancelarOcorrencia, now }) 
 /* ============================================================
    VIEW: REGULAÇÃO MÉDICA
    ============================================================ */
-function RegulacaoView({ ocorrencias, onRegular, onAbrir, onContraRegulacao, onAlterarClassificacao, onAlterarViatura, onAdicionarInfoComplementar, onCancelarRegulada, onDefinirUnidadeDestino }) {
+function RegulacaoView({ ocorrencias, sessao, onRegular, onAbrir, onContraRegulacao, onAlterarClassificacao, onAlterarViatura, onAdicionarInfoComplementar, onCancelarRegulada, onDefinirUnidadeDestino }) {
   const fila = ocorrencias.filter((o) => o.status === "aguardando_regulacao").sort((a, b) => new Date(a.criadoEm) - new Date(b.criadoEm));
   const emCurso = ocorrencias.filter((o) => ["aguardando_veiculo", "despachado", "em_atendimento"].includes(o.status));
   const [ativa, setAtiva] = useState(null);
@@ -689,7 +682,7 @@ function RegulacaoView({ ocorrencias, onRegular, onAbrir, onContraRegulacao, onA
   }
   function concluir() {
     if (!classificacao || !conduta || !tipoClass || !motivoClass) return;
-    onRegular(ativa.id, { avaliacao, tipoClassificacao: tipoClass, motivoClassificacao: motivoClass, motivoClassificacaoOutro: motivoClassOutro, classificacao, conduta, medico: "Dr(a). Regulador Plantão" });
+    onRegular(ativa.id, { avaliacao, tipoClassificacao: tipoClass, motivoClassificacao: motivoClass, motivoClassificacaoOutro: motivoClassOutro, classificacao, conduta, medico: `Dr(a). ${sessao?.nome || "Regulador Plantão"}` });
     setAtiva(null);
   }
   function confirmarCancelAtiva() {
@@ -2160,7 +2153,7 @@ export default function App() {
           </div>
 
           {papelEfetivo === "tarm" && <TarmView ocorrencias={ocorrencias} onNovaOcorrencia={criarOcorrencia} onCancelarOcorrencia={cancelarOcorrencia} now={now} />}
-          {papelEfetivo === "regulacao" && <RegulacaoView ocorrencias={ocorrencias} onRegular={regular} onAbrir={setModalOc} onContraRegulacao={contraRegular} onAlterarClassificacao={alterarClassificacao} onAlterarViatura={alterarViatura} onAdicionarInfoComplementar={adicionarInfoComplementar} onCancelarRegulada={cancelarRegulada} onDefinirUnidadeDestino={definirUnidadeDestino} />}
+          {papelEfetivo === "regulacao" && <RegulacaoView ocorrencias={ocorrencias} sessao={sessao} onRegular={regular} onAbrir={setModalOc} onContraRegulacao={contraRegular} onAlterarClassificacao={alterarClassificacao} onAlterarViatura={alterarViatura} onAdicionarInfoComplementar={adicionarInfoComplementar} onCancelarRegulada={cancelarRegulada} onDefinirUnidadeDestino={definirUnidadeDestino} />}
           {papelEfetivo === "frota" && <FrotaView ocorrencias={ocorrencias} veiculos={veiculos} onDespachar={despachar} onMarcarTempo={marcarTempo} onAbrir={setModalOc} onAddVeiculo={adicionarVeiculo} onRemoveVeiculo={removerVeiculo} onUpdateVeiculo={atualizarVeiculo} onToggleStatus={alternarStatusVeiculo} onTrocarViatura={trocarViatura} onAdicionarViaturaExtra={adicionarViaturaExtra} onRemoverViaturaOcorrencia={removerViaturaDaOcorrencia} onCancelarOcorrenciaFrota={cancelarOcorrenciaFrota} onRegistrarObito={registrarObito} onLiberarViatura={liberarViatura} />}
           {papelEfetivo === "gestao" && <GestaoView ocorrencias={ocorrencias} veiculos={veiculos} onAbrir={setModalOc} usuarios={usuarios} sessao={sessao} onCadastrarFuncionario={cadastrarFuncionario} onAtualizarFuncionario={atualizarFuncionario} onDefinirAtivoFuncionario={definirAtivoFuncionario} onRecarregarFuncionarios={recarregarUsuarios} />}
         </div>
