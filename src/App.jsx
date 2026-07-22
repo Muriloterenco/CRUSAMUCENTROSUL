@@ -1759,6 +1759,7 @@ export default function App() {
   useEffect(() => { const t = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(t); }, []);
 
   function notificar(msg) { setToast(msg); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(null), 2600); }
+  function autorAtual(rotulo) { return `${rotulo} (${sessao?.nome || "desconhecido"})`; }
 
   /* ---- Autenticação (Supabase Auth) ---- */
   async function montarSessao(user) {
@@ -1829,7 +1830,7 @@ export default function App() {
   /* ---- Ocorrências: TARM ---- */
   async function criarOcorrencia(dadosTarm) {
     const tarm = { ...dadosTarm, operador: sessao?.nome || "TARM em plantão" };
-    const historico = [{ ts: agora(), autor: "TARM", evento: "Ocorrência registrada e enviada à regulação" }];
+    const historico = [{ ts: agora(), autor: autorAtual("TARM"), evento: "Ocorrência registrada e enviada à regulação" }];
     const { data, error } = await supabase.from("ocorrencias").insert({ tarm, status: "aguardando_regulacao", regulacao: {}, despacho: {}, historico }).select().single();
     if (error) { notificar("Erro ao registrar ocorrência: " + error.message); return; }
     setOcorrencias((prev) => mesclarOcorrencia(prev, { eventType: "INSERT", new: data }));
@@ -1838,7 +1839,7 @@ export default function App() {
 
   async function cancelarOcorrencia(dadosTarm, justificativa, motivo) {
     const tarm = { ...dadosTarm, operador: sessao?.nome || "TARM em plantão" };
-    const historico = [{ ts: agora(), autor: "TARM", evento: `Ocorrência cancelada — Motivo: ${motivo}${motivo === "OUTROS" ? ` (${justificativa})` : ""}` }];
+    const historico = [{ ts: agora(), autor: autorAtual("TARM"), evento: `Ocorrência cancelada — Motivo: ${motivo}${motivo === "OUTROS" ? ` (${justificativa})` : ""}` }];
     const { data, error } = await supabase.from("ocorrencias").insert({
       tarm, status: "cancelado", justificativa_cancelamento: justificativa, motivo_cancelamento_tarm: motivo, regulacao: {}, despacho: {}, historico,
     }).select().single();
@@ -1866,7 +1867,7 @@ export default function App() {
     await atualizarOcorrencia(id, {
       status: proximoStatus,
       regulacao: { ...dados, inicioRegulacao: o.criadoEm, fimRegulacao: fim },
-      historico: [...o.historico, { ts: fim, autor: "Regulação", evento }],
+      historico: [...o.historico, { ts: fim, autor: autorAtual("Regulação"), evento }],
     });
     notificar(`Ocorrência regulada — encaminhada para ${indicaViatura ? "frota" : "arquivo"}.`);
   }
@@ -1874,7 +1875,7 @@ export default function App() {
   async function contraRegular(id, texto) {
     const o = buscarOc(id); if (!o) return;
     const ts = agora();
-    await atualizarOcorrencia(id, { regulacao: { ...o.regulacao, contraRegulacao: texto }, historico: [...o.historico, { ts, autor: "Regulação", evento: `Contra-regulação: ${texto}` }] });
+    await atualizarOcorrencia(id, { regulacao: { ...o.regulacao, contraRegulacao: texto }, historico: [...o.historico, { ts, autor: autorAtual("Regulação"), evento: `Contra-regulação: ${texto}` }] });
     notificar("Contra-regulação registrada.");
   }
   async function alterarClassificacao(id, novaClassificacao) {
@@ -1882,7 +1883,7 @@ export default function App() {
     const ts = agora();
     await atualizarOcorrencia(id, {
       regulacao: { ...o.regulacao, classificacao: novaClassificacao },
-      historico: [...o.historico, { ts, autor: "Regulação", evento: `Classificação de risco alterada para ${PRIORIDADES.find((p) => p.key === novaClassificacao)?.label || novaClassificacao}` }],
+      historico: [...o.historico, { ts, autor: autorAtual("Regulação"), evento: `Classificação de risco alterada para ${PRIORIDADES.find((p) => p.key === novaClassificacao)?.label || novaClassificacao}` }],
     });
     notificar("Classificação de risco atualizada.");
   }
@@ -1894,7 +1895,7 @@ export default function App() {
     await atualizarOcorrencia(id, {
       regulacao: { ...o.regulacao, conduta: novaConduta },
       precisa_trocar_viatura: jaDespachada ? true : o.precisaTrocarViatura || false,
-      historico: [...o.historico, { ts, autor: "Regulação", evento: jaDespachada ? `${eventoBase} — nova viatura deve ser selecionada na frota` : eventoBase }],
+      historico: [...o.historico, { ts, autor: autorAtual("Regulação"), evento: jaDespachada ? `${eventoBase} — nova viatura deve ser selecionada na frota` : eventoBase }],
     });
     notificar("Viatura/conduta indicada atualizada.");
   }
@@ -1903,14 +1904,14 @@ export default function App() {
     const ts = agora();
     await atualizarOcorrencia(id, {
       regulacao: { ...o.regulacao, informacoesComplementares: [...(o.regulacao.informacoesComplementares || []), { ts, texto }] },
-      historico: [...o.historico, { ts, autor: "Regulação", evento: "Informação complementar registrada" }],
+      historico: [...o.historico, { ts, autor: autorAtual("Regulação"), evento: "Informação complementar registrada" }],
     });
     notificar("Informação complementar adicionada.");
   }
   async function cancelarRegulada(id, justificativa) {
     const o = buscarOc(id); if (!o) return;
     const ts = agora();
-    await atualizarOcorrencia(id, { status: "cancelado", justificativa_cancelamento: justificativa, historico: [...o.historico, { ts, autor: "Regulação", evento: `Ocorrência cancelada — Justificativa: ${justificativa}` }] });
+    await atualizarOcorrencia(id, { status: "cancelado", justificativa_cancelamento: justificativa, historico: [...o.historico, { ts, autor: autorAtual("Regulação"), evento: `Ocorrência cancelada — Justificativa: ${justificativa}` }] });
     notificar("Ocorrência cancelada.");
   }
   async function definirUnidadeDestino(id, unidade, outro) {
@@ -1918,7 +1919,7 @@ export default function App() {
     const ts = agora();
     await atualizarOcorrencia(id, {
       regulacao: { ...o.regulacao, unidadeDestino: unidade, unidadeDestinoOutro: outro },
-      historico: [...o.historico, { ts, autor: "Regulação", evento: `Unidade Destino definida: ${valorOutro(unidade, outro)}` }],
+      historico: [...o.historico, { ts, autor: autorAtual("Regulação"), evento: `Unidade Destino definida: ${valorOutro(unidade, outro)}` }],
     });
     notificar("Unidade Destino atualizada.");
   }
@@ -1936,7 +1937,7 @@ export default function App() {
     await atualizarOcorrencia(ocId, {
       status: "despachado",
       despacho: { veiculoId, veiculosExtras: [], acionamento: ts, destino },
-      historico: [...o.historico, { ts, autor: "Frota", evento: `Viatura ${veiculoId} acionada` }],
+      historico: [...o.historico, { ts, autor: autorAtual("Frota"), evento: `Viatura ${veiculoId} acionada` }],
     });
     await atualizarVeiculoStatus(veiculoId, "em_deslocamento");
     notificar(`Viatura ${veiculoId} acionada.`);
@@ -1949,7 +1950,7 @@ export default function App() {
     const despacho = { ...o.despacho, [etapa]: ts };
     let status = o.status;
     if (etapa === "chegadaLocal") status = "em_atendimento";
-    await atualizarOcorrencia(ocId, { status, despacho, historico: [...o.historico, { ts, autor: "Frota", evento: label }] });
+    await atualizarOcorrencia(ocId, { status, despacho, historico: [...o.historico, { ts, autor: autorAtual("Frota"), evento: label }] });
     if (etapa === "chegadaLocal" && o.despacho.veiculoId) await atualizarVeiculoStatus(o.despacho.veiculoId, "ocupado");
   }
 
@@ -1961,7 +1962,7 @@ export default function App() {
       status: "despachado",
       precisa_trocar_viatura: false,
       despacho: { ...o.despacho, veiculoId: novoVeiculoId, acionamento: ts, saidaBase: undefined, chegadaLocal: undefined, saidaLocal: undefined, chegadaDestino: undefined },
-      historico: [...o.historico, { ts, autor: "Frota", evento: `Viatura alterada${veiculoAnterior ? ` de ${veiculoAnterior}` : ""} para ${novoVeiculoId} por determinação médica` }],
+      historico: [...o.historico, { ts, autor: autorAtual("Frota"), evento: `Viatura alterada${veiculoAnterior ? ` de ${veiculoAnterior}` : ""} para ${novoVeiculoId} por determinação médica` }],
     });
     await atualizarVeiculoStatus(novoVeiculoId, "em_deslocamento");
     if (veiculoAnterior) await atualizarVeiculoStatus(veiculoAnterior, "disponivel");
@@ -1973,7 +1974,7 @@ export default function App() {
     const ts = agora();
     await atualizarOcorrencia(ocId, {
       despacho: { ...o.despacho, veiculosExtras: [...(o.despacho.veiculosExtras || []), veiculoId] },
-      historico: [...o.historico, { ts, autor: "Frota", evento: `Viatura adicional ${veiculoId} incluída na ocorrência` }],
+      historico: [...o.historico, { ts, autor: autorAtual("Frota"), evento: `Viatura adicional ${veiculoId} incluída na ocorrência` }],
     });
     await atualizarVeiculoStatus(veiculoId, "em_deslocamento");
     notificar(`Viatura ${veiculoId} adicionada à ocorrência.`);
@@ -1990,7 +1991,7 @@ export default function App() {
     } else {
       despacho = { ...o.despacho, veiculosExtras: (o.despacho.veiculosExtras || []).filter((v) => v !== veiculoId) };
     }
-    await atualizarOcorrencia(ocId, { despacho, historico: [...o.historico, { ts, autor: "Frota", evento: `Viatura ${veiculoId} removida da ocorrência` }] });
+    await atualizarOcorrencia(ocId, { despacho, historico: [...o.historico, { ts, autor: autorAtual("Frota"), evento: `Viatura ${veiculoId} removida da ocorrência` }] });
     await atualizarVeiculoStatus(veiculoId, "disponivel");
     notificar(`Viatura ${veiculoId} removida da ocorrência.`);
   }
@@ -1999,7 +2000,7 @@ export default function App() {
     const o = buscarOc(ocId); if (!o) return;
     const ts = agora();
     const veiculosParaLiberar = [o.despacho?.veiculoId, ...(o.despacho?.veiculosExtras || [])].filter(Boolean);
-    await atualizarOcorrencia(ocId, { status: "cancelado", justificativa_cancelamento: justificativa, historico: [...o.historico, { ts, autor: "Frota", evento: `Ocorrência cancelada — Justificativa: ${justificativa}` }] });
+    await atualizarOcorrencia(ocId, { status: "cancelado", justificativa_cancelamento: justificativa, historico: [...o.historico, { ts, autor: autorAtual("Frota"), evento: `Ocorrência cancelada — Justificativa: ${justificativa}` }] });
     for (const vid of veiculosParaLiberar) await atualizarVeiculoStatus(vid, "disponivel");
     notificar("Ocorrência cancelada e viatura(s) liberada(s).");
   }
@@ -2007,7 +2008,7 @@ export default function App() {
   async function registrarObito(ocId, tipo) {
     const o = buscarOc(ocId); if (!o) return;
     const ts = agora();
-    await atualizarOcorrencia(ocId, { obito: tipo, historico: [...o.historico, { ts, autor: "Frota", evento: `Óbito registrado — ${tipo}` }] });
+    await atualizarOcorrencia(ocId, { obito: tipo, historico: [...o.historico, { ts, autor: autorAtual("Frota"), evento: `Óbito registrado — ${tipo}` }] });
     notificar(`Óbito (${tipo}) registrado.`);
   }
 
@@ -2015,7 +2016,7 @@ export default function App() {
     const o = buscarOc(ocId); if (!o) return;
     const ts = agora();
     const veiculosParaLiberar = [o.despacho?.veiculoId, ...(o.despacho?.veiculosExtras || [])].filter(Boolean);
-    await atualizarOcorrencia(ocId, { status: "concluido", historico: [...o.historico, { ts, autor: "Frota", evento: "Viatura(s) liberada(s) — ocorrência finalizada" }] });
+    await atualizarOcorrencia(ocId, { status: "concluido", historico: [...o.historico, { ts, autor: autorAtual("Frota"), evento: "Viatura(s) liberada(s) — ocorrência finalizada" }] });
     for (const vid of veiculosParaLiberar) await atualizarVeiculoStatus(vid, "disponivel");
     notificar("Viatura(s) liberada(s) — QRV.");
   }
