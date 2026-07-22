@@ -1291,20 +1291,53 @@ function computeStats(lista, veiculos) {
   const temposResposta = lista.filter((o) => o.despacho?.chegadaLocal).map((o) => (new Date(o.despacho.chegadaLocal) - new Date(o.criadoEm)) / 60000);
   const mediaResposta = temposResposta.length ? (temposResposta.reduce((a, b) => a + b, 0) / temposResposta.length).toFixed(1) : "—";
   const veiculosAtivos = veiculos.filter((v) => v.status !== "disponivel" && v.status !== "manutencao").length;
-  const porClassificacao = PRIORIDADES.map((p) => ({ name: p.label.split("—")[0].trim(), value: lista.filter((o) => o.regulacao?.classificacao === p.key).length, color: p.color })).filter((d) => d.value > 0);
+  const porClassificacao = PRIORIDADES.map((p) => ({ name: p.label.split("—")[0].trim(), value: lista.filter((o) => o.regulacao?.classificacao === p.key).length, color: p.color }));
   const buckets = {};
   lista.forEach((o) => { const h = new Date(o.criadoEm).getHours(); const key = `${String(h).padStart(2, "0")}h`; buckets[key] = (buckets[key] || 0) + 1; });
   const porHora = Object.entries(buckets).map(([hora, qtd]) => ({ hora, qtd })).sort((a, b) => a.hora.localeCompare(b.hora));
-  const bucketsTipo = {};
-  lista.forEach((o) => { if (!o.despacho?.veiculoId) return; const v = veiculos.find((x) => x.id === o.despacho.veiculoId); const tipo = v ? v.tipo : "?"; bucketsTipo[tipo] = (bucketsTipo[tipo] || 0) + 1; });
-  const porTipoVeiculo = Object.entries(bucketsTipo).map(([tipo, qtd]) => ({ tipo: TIPO_LABEL[tipo] || tipo, qtd }));
+
+  // Normaliza o tipo de viatura em apenas 3 categorias (Motolância, USB, USA),
+  // reconhecendo a palavra-chave dentro do campo "tipo" (que é texto livre) e
+  // ignorando qualquer texto extra (ex.: número/ramal) e outros tipos (ex.: VIR).
+  function normalizarTipoVeiculo(tipoBruto) {
+    const t = (tipoBruto || "").toUpperCase();
+    if (t.includes("MOTO")) return "Motolância";
+    if (t.includes("USA")) return "USA";
+    if (t.includes("USB")) return "USB";
+    return null;
+  }
+  const bucketsTipo = { "Motolância": 0, "USB": 0, "USA": 0 };
+  lista.forEach((o) => {
+    if (!o.despacho?.veiculoId) return;
+    const v = veiculos.find((x) => x.id === o.despacho.veiculoId);
+    const categoria = normalizarTipoVeiculo(v?.tipo);
+    if (categoria) bucketsTipo[categoria] += 1;
+  });
+  const porTipoVeiculo = Object.entries(bucketsTipo).map(([tipo, qtd]) => ({ tipo, qtd }));
+
   const bucketsViatura = {};
   lista.forEach((o) => {
     if (o.despacho?.veiculoId) bucketsViatura[o.despacho.veiculoId] = (bucketsViatura[o.despacho.veiculoId] || 0) + 1;
     (o.despacho?.veiculosExtras || []).forEach((vid) => { bucketsViatura[vid] = (bucketsViatura[vid] || 0) + 1; });
   });
   const porViaturaSelecionada = Object.entries(bucketsViatura).map(([viatura, qtd]) => ({ viatura, qtd })).sort((a, b) => b.qtd - a.qtd);
-  return { total, concluidas, orientacoes, trote, canceladas, mediaRegulacao, mediaResposta, veiculosAtivos, porClassificacao, porHora, porTipoVeiculo, porViaturaSelecionada };
+
+  // Tempo médio de resposta, dividido por fase (em minutos).
+  function diffMin(a, b) { if (!a || !b) return null; return (new Date(b) - new Date(a)) / 60000; }
+  function media(arr) { return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0; }
+  const tDespacho = lista.map((o) => diffMin(o.criadoEm, o.despacho?.acionamento)).filter((v) => v != null);
+  const tDeslocamento = lista.map((o) => diffMin(o.despacho?.acionamento, o.despacho?.chegadaLocal)).filter((v) => v != null);
+  const tCena = lista.map((o) => diffMin(o.despacho?.chegadaLocal, o.despacho?.saidaLocal)).filter((v) => v != null);
+  const tDestino = lista.map((o) => diffMin(o.despacho?.saidaLocal, o.despacho?.chegadaDestino)).filter((v) => v != null);
+  const temposPorFase = [
+    { fase: "Despacho", min: Math.round(media(tDespacho)) },
+    { fase: "Deslocamento", min: Math.round(media(tDeslocamento)) },
+    { fase: "Cena", min: Math.round(media(tCena)) },
+    { fase: "Destino", min: Math.round(media(tDestino)) },
+  ];
+  const totalTempoFases = temposPorFase.reduce((a, f) => a + f.min, 0);
+
+  return { total, concluidas, orientacoes, trote, canceladas, mediaRegulacao, mediaResposta, veiculosAtivos, porClassificacao, porHora, porTipoVeiculo, porViaturaSelecionada, temposPorFase, totalTempoFases };
 }
 
 function DashboardBlock({ stats, totalVeiculos }) {
@@ -1328,18 +1361,20 @@ function DashboardBlock({ stats, totalVeiculos }) {
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <Panel title="Ocorrências por classificação de risco" icon={FileBarChart}>
-          <ResponsiveContainer width="100%" height={230}>
-            <PieChart>
-              <Pie data={stats.porClassificacao} dataKey="value" nameKey="name" innerRadius={52} outerRadius={84} paddingAngle={2}>
-                {stats.porClassificacao.map((d, i) => <Cell key={i} fill={d.color} stroke={COLORS.panel} />)}
-              </Pie>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={stats.porClassificacao} layout="vertical" margin={{ left: 20 }}>
+              <CartesianGrid stroke={COLORS.line} strokeDasharray="3 3" horizontal={false} />
+              <XAxis type="number" tick={{ fill: COLORS.textDim, fontSize: 12 }} allowDecimals={false} />
+              <YAxis type="category" dataKey="name" tick={{ fill: COLORS.textDim, fontSize: 12 }} width={80} />
               <Tooltip contentStyle={{ background: COLORS.panel, border: `1px solid ${COLORS.line}`, borderRadius: 6, fontSize: 13 }} />
-              <Legend wrapperStyle={{ fontSize: 12.5, color: COLORS.textDim }} />
-            </PieChart>
+              <Bar dataKey="value" radius={[0, 3, 3, 0]}>
+                {stats.porClassificacao.map((d, i) => <Cell key={i} fill={d.color} />)}
+              </Bar>
+            </BarChart>
           </ResponsiveContainer>
         </Panel>
         <Panel title="Volume de ocorrências por horário" icon={TrendingUp}>
-          <ResponsiveContainer width="100%" height={230}>
+          <ResponsiveContainer width="100%" height={200}>
             <LineChart data={stats.porHora}>
               <CartesianGrid stroke={COLORS.line} strokeDasharray="3 3" />
               <XAxis dataKey="hora" tick={{ fill: COLORS.textDim, fontSize: 12 }} />
@@ -1351,29 +1386,41 @@ function DashboardBlock({ stats, totalVeiculos }) {
         </Panel>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <Panel title="Tempo médio de resposta por fase" icon={Timer} right={<span style={{ fontFamily: FONT_MONO, fontSize: 12.5, color: COLORS.accent2, fontWeight: 700 }}>{stats.totalTempoFases} min no total</span>}>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={stats.temposPorFase} layout="vertical" margin={{ left: 20 }}>
+              <CartesianGrid stroke={COLORS.line} strokeDasharray="3 3" horizontal={false} />
+              <XAxis type="number" tick={{ fill: COLORS.textDim, fontSize: 12 }} allowDecimals={false} unit=" min" />
+              <YAxis type="category" dataKey="fase" tick={{ fill: COLORS.textDim, fontSize: 12 }} width={100} />
+              <Tooltip contentStyle={{ background: COLORS.panel, border: `1px solid ${COLORS.line}`, borderRadius: 6, fontSize: 13 }} formatter={(v) => [`${v} min`, "Tempo médio"]} />
+              <Bar dataKey="min" fill={COLORS.accent2} radius={[0, 3, 3, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </Panel>
         <Panel title="Despachos por tipo de viatura" icon={Truck}>
-          <ResponsiveContainer width="100%" height={190}>
+          <ResponsiveContainer width="100%" height={200}>
             <BarChart data={stats.porTipoVeiculo} layout="vertical" margin={{ left: 20 }}>
               <CartesianGrid stroke={COLORS.line} strokeDasharray="3 3" horizontal={false} />
               <XAxis type="number" tick={{ fill: COLORS.textDim, fontSize: 12 }} allowDecimals={false} />
-              <YAxis type="category" dataKey="tipo" tick={{ fill: COLORS.textDim, fontSize: 12 }} width={150} />
+              <YAxis type="category" dataKey="tipo" tick={{ fill: COLORS.textDim, fontSize: 12 }} width={110} />
               <Tooltip contentStyle={{ background: COLORS.panel, border: `1px solid ${COLORS.line}`, borderRadius: 6, fontSize: 13 }} />
               <Bar dataKey="qtd" fill={COLORS.accent} radius={[0, 3, 3, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </Panel>
-        <Panel title="Despachos por viaturas selecionadas" icon={Gauge}>
-          <ResponsiveContainer width="100%" height={190}>
-            <BarChart data={stats.porViaturaSelecionada} layout="vertical" margin={{ left: 20 }}>
-              <CartesianGrid stroke={COLORS.line} strokeDasharray="3 3" horizontal={false} />
-              <XAxis type="number" tick={{ fill: COLORS.textDim, fontSize: 12 }} allowDecimals={false} />
-              <YAxis type="category" dataKey="viatura" tick={{ fill: COLORS.textDim, fontSize: 12 }} width={80} />
-              <Tooltip contentStyle={{ background: COLORS.panel, border: `1px solid ${COLORS.line}`, borderRadius: 6, fontSize: 13 }} />
-              <Bar dataKey="qtd" fill={COLORS.accent2} radius={[0, 3, 3, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </Panel>
       </div>
+
+      <Panel title="Despachos por viaturas selecionadas" icon={Gauge}>
+        <ResponsiveContainer width="100%" height={190}>
+          <BarChart data={stats.porViaturaSelecionada} layout="vertical" margin={{ left: 20 }}>
+            <CartesianGrid stroke={COLORS.line} strokeDasharray="3 3" horizontal={false} />
+            <XAxis type="number" tick={{ fill: COLORS.textDim, fontSize: 12 }} allowDecimals={false} />
+            <YAxis type="category" dataKey="viatura" tick={{ fill: COLORS.textDim, fontSize: 12 }} width={80} />
+            <Tooltip contentStyle={{ background: COLORS.panel, border: `1px solid ${COLORS.line}`, borderRadius: 6, fontSize: 13 }} />
+            <Bar dataKey="qtd" fill={COLORS.accent2} radius={[0, 3, 3, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </Panel>
     </div>
   );
 }
