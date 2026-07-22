@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import {
   ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis,
-  CartesianGrid, Tooltip, LineChart, Line, Legend
+  CartesianGrid, Tooltip, LineChart, Line, Legend, LabelList
 } from "recharts";
 
 /* ============================================================
@@ -1356,19 +1356,19 @@ function DashboardBlock({ stats, totalVeiculos }) {
         {kpi("Canceladas", stats.canceladas, <X size={14} />)}
         {kpi("Concluídas", stats.concluidas, <CheckCircle2 size={14} />)}
         {kpi("Tempo médio de regulação", stats.mediaRegulacao, <Timer size={14} />, " min")}
-        {kpi("Tempo médio de resposta", stats.mediaResposta, <TrendingUp size={14} />, " min")}
         {kpi("Viaturas em operação", `${stats.veiculosAtivos}/${totalVeiculos}`, <Truck size={14} />)}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        <Panel title="Ocorrências por classificação de risco" icon={FileBarChart}>
+        <Panel title="Ocorrências por classificação de risco" icon={FileBarChart} right={<span style={{ fontFamily: FONT_MONO, fontSize: 12.5, color: COLORS.accent2, fontWeight: 700 }}>{stats.porClassificacao.reduce((a, d) => a + d.value, 0)} no total</span>}>
           <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={stats.porClassificacao} layout="vertical" margin={{ left: 20 }}>
+            <BarChart data={stats.porClassificacao} layout="vertical" margin={{ left: 20, right: 28 }}>
               <CartesianGrid stroke={COLORS.line} strokeDasharray="3 3" horizontal={false} />
               <XAxis type="number" tick={{ fill: COLORS.textDim, fontSize: 12 }} allowDecimals={false} />
               <YAxis type="category" dataKey="name" tick={{ fill: COLORS.textDim, fontSize: 12 }} width={80} />
               <Tooltip contentStyle={{ background: COLORS.panel, border: `1px solid ${COLORS.line}`, borderRadius: 6, fontSize: 13 }} />
               <Bar dataKey="value" radius={[0, 3, 3, 0]}>
                 {stats.porClassificacao.map((d, i) => <Cell key={i} fill={d.color} />)}
+                <LabelList dataKey="value" position="right" style={{ fill: COLORS.text, fontSize: 12.5, fontWeight: 700 }} />
               </Bar>
             </BarChart>
           </ResponsiveContainer>
@@ -1388,38 +1388,55 @@ function DashboardBlock({ stats, totalVeiculos }) {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <Panel title="Tempo médio de resposta por fase" icon={Timer} right={<span style={{ fontFamily: FONT_MONO, fontSize: 12.5, color: COLORS.accent2, fontWeight: 700 }}>{stats.totalTempoFases} min no total</span>}>
           <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={stats.temposPorFase} layout="vertical" margin={{ left: 20 }}>
+            <BarChart data={stats.temposPorFase} layout="vertical" margin={{ left: 20, right: 28 }}>
               <CartesianGrid stroke={COLORS.line} strokeDasharray="3 3" horizontal={false} />
               <XAxis type="number" tick={{ fill: COLORS.textDim, fontSize: 12 }} allowDecimals={false} unit=" min" />
               <YAxis type="category" dataKey="fase" tick={{ fill: COLORS.textDim, fontSize: 12 }} width={100} />
               <Tooltip contentStyle={{ background: COLORS.panel, border: `1px solid ${COLORS.line}`, borderRadius: 6, fontSize: 13 }} formatter={(v) => [`${v} min`, "Tempo médio"]} />
-              <Bar dataKey="min" fill={COLORS.accent2} radius={[0, 3, 3, 0]} />
+              <Bar dataKey="min" fill={COLORS.accent2} radius={[0, 3, 3, 0]}>
+                <LabelList dataKey="min" position="right" formatter={(v) => `${v} min`} style={{ fill: COLORS.text, fontSize: 12.5, fontWeight: 700 }} />
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
         </Panel>
-        <Panel title="Despachos por tipo de viatura" icon={Truck}>
+        <Panel title="Despachos por tipo de viatura" icon={Truck} right={<span style={{ fontFamily: FONT_MONO, fontSize: 12.5, color: COLORS.accent2, fontWeight: 700 }}>{stats.porTipoVeiculo.reduce((a, d) => a + d.qtd, 0)} no total</span>}>
           <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={stats.porTipoVeiculo} layout="vertical" margin={{ left: 20 }}>
+            <BarChart data={stats.porTipoVeiculo} layout="vertical" margin={{ left: 20, right: 28 }}>
               <CartesianGrid stroke={COLORS.line} strokeDasharray="3 3" horizontal={false} />
               <XAxis type="number" tick={{ fill: COLORS.textDim, fontSize: 12 }} allowDecimals={false} />
               <YAxis type="category" dataKey="tipo" tick={{ fill: COLORS.textDim, fontSize: 12 }} width={110} />
               <Tooltip contentStyle={{ background: COLORS.panel, border: `1px solid ${COLORS.line}`, borderRadius: 6, fontSize: 13 }} />
-              <Bar dataKey="qtd" fill={COLORS.accent} radius={[0, 3, 3, 0]} />
+              <Bar dataKey="qtd" fill={COLORS.accent} radius={[0, 3, 3, 0]}>
+                <LabelList dataKey="qtd" position="right" style={{ fill: COLORS.text, fontSize: 12.5, fontWeight: 700 }} />
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
         </Panel>
       </div>
 
-      <Panel title="Despachos por viaturas selecionadas" icon={Gauge}>
-        <ResponsiveContainer width="100%" height={190}>
-          <BarChart data={stats.porViaturaSelecionada} layout="vertical" margin={{ left: 20 }}>
-            <CartesianGrid stroke={COLORS.line} strokeDasharray="3 3" horizontal={false} />
-            <XAxis type="number" tick={{ fill: COLORS.textDim, fontSize: 12 }} allowDecimals={false} />
-            <YAxis type="category" dataKey="viatura" tick={{ fill: COLORS.textDim, fontSize: 12 }} width={80} />
-            <Tooltip contentStyle={{ background: COLORS.panel, border: `1px solid ${COLORS.line}`, borderRadius: 6, fontSize: 13 }} />
-            <Bar dataKey="qtd" fill={COLORS.accent2} radius={[0, 3, 3, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
+      <Panel title="Despachos por viaturas selecionadas" icon={Gauge} right={
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {stats.porViaturaSelecionada.length > 8 && <span style={{ fontSize: 12, color: COLORS.textFaint }}>mostrando as 8 mais despachadas</span>}
+          <span style={{ fontFamily: FONT_MONO, fontSize: 12.5, color: COLORS.accent2, fontWeight: 700 }}>{stats.porViaturaSelecionada.reduce((a, d) => a + d.qtd, 0)} no total</span>
+        </div>
+      }>
+        {(() => {
+          const dadosViatura = stats.porViaturaSelecionada.slice(0, 8);
+          const altura = Math.max(150, dadosViatura.length * 38 + 30);
+          return (
+            <ResponsiveContainer width="100%" height={altura}>
+              <BarChart data={dadosViatura} layout="vertical" margin={{ left: 20, right: 28 }}>
+                <CartesianGrid stroke={COLORS.line} strokeDasharray="3 3" horizontal={false} />
+                <XAxis type="number" tick={{ fill: COLORS.textDim, fontSize: 12 }} allowDecimals={false} />
+                <YAxis type="category" dataKey="viatura" tick={{ fill: COLORS.text, fontSize: 13, fontWeight: 600 }} width={90} />
+                <Tooltip contentStyle={{ background: COLORS.panel, border: `1px solid ${COLORS.line}`, borderRadius: 6, fontSize: 13 }} />
+                <Bar dataKey="qtd" fill={COLORS.accent2} radius={[0, 3, 3, 0]} barSize={22}>
+                  <LabelList dataKey="qtd" position="right" style={{ fill: COLORS.text, fontSize: 12.5, fontWeight: 700 }} />
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          );
+        })()}
       </Panel>
     </div>
   );
@@ -1638,7 +1655,7 @@ function GestaoView({ ocorrencias, veiculos, onAbrir, usuarios, sessao, onCadast
       {aba === "visao" && (
         <>
           <div style={{ fontSize: 13, color: COLORS.textFaint, marginBottom: -6 }}>Dados de hoje ({fmtData(now)}) — reiniciados automaticamente à meia-noite.</div>
-          <DashboardBlock stats={statsHoje} totalVeiculos={veiculos.length} />
+          <DashboardBlock stats={statsHoje} totalVeiculos={veiculos.filter((v) => v.status !== "manutencao").length} />
         </>
       )}
 
@@ -1649,7 +1666,7 @@ function GestaoView({ ocorrencias, veiculos, onAbrir, usuarios, sessao, onCadast
             <FiltroDataBar filtro={filtroIndicadores} setFiltro={setFiltroIndicadores} />
             {carregandoIndicadores && <span style={{ fontSize: 12.5, color: COLORS.textFaint }}>Carregando...</span>}
           </div>
-          <DashboardBlock stats={statsIndicadores} totalVeiculos={veiculos.length} />
+          <DashboardBlock stats={statsIndicadores} totalVeiculos={veiculos.filter((v) => v.status !== "manutencao").length} />
         </>
       )}
 
