@@ -47,7 +47,7 @@ const PRIORIDADES = [
 ];
 const STATUS_LABEL = {
   aguardando_regulacao: "Aguardando regulação", em_regulacao: "Em regulação médica", aguardando_veiculo: "Aguardando veículo",
-  despachado: "Veículo despachado", em_atendimento: "Em atendimento no local", concluido: "Concluída",
+  despachado: "Veículo despachado", em_atendimento: "Em atendimento no local", encerrada: "Encerrada — aguardando liberação", concluido: "Concluída",
   orientacao_dada: "Orientação telefônica concluída", cancelado: "Cancelada",
 };
 const TIPOS_ATENDIMENTO = ["APH", "TRANSPORTE", "RESGATE", "ORIENTAÇÃO"];
@@ -59,9 +59,13 @@ const CONDUTAS_MEDICAS = [
 ];
 const MOTIVOS_CANCELAMENTO = ["TROTE", "ENGANO", "QUEDA DA LIGAÇÃO", "OUTROS"];
 const MOTIVOS_CANCELAMENTO_ATENDIMENTO = [
-  "ATENDIDO PELO BOMBEIRO", "ATENDIDO E LIBERADO NO LOCAL", "PACIENTE EVADIU DO LOCAL",
+  "ATENDIDO PELO BOMBEIRO", "PACIENTE EVADIU DO LOCAL",
   "LOCAL/PACIENTE NÃO ENCONTRADO", "LIGAÇÃO CAIU", "SOLICITANTE CANCELOU OCORRÊNCIA",
-  "RECUSA DE ATENDIMENTO", "REMOVIDO POR MEIOS PRÓPRIOS/TERCEIROS", "TROTE", "OUTROS",
+  "REMOVIDO POR MEIOS PRÓPRIOS/TERCEIROS", "TROTE", "OUTROS",
+];
+const MOTIVOS_ENCERRAMENTO = [
+  "ÓBITO COM D.O.", "ÓBITO P/ SVO", "ÓBITO P/ IML",
+  "ATENDIDO E LIBERADO NO LOCAL", "RECUSOU ATENDIMENTO/REMOÇÃO", "OUTROS",
 ];
 
 const MUNICIPIOS = [
@@ -155,7 +159,7 @@ function PrioridadeChip({ cls }) {
   );
 }
 function StatusChip({ status }) {
-  const map = { aguardando_regulacao: COLORS.amarelo, em_regulacao: COLORS.accent2, aguardando_veiculo: COLORS.accent, despachado: COLORS.azul, em_atendimento: COLORS.verde, concluido: COLORS.textFaint, orientacao_dada: COLORS.textFaint, cancelado: COLORS.vermelho };
+  const map = { aguardando_regulacao: COLORS.amarelo, em_regulacao: COLORS.accent2, aguardando_veiculo: COLORS.accent, despachado: COLORS.azul, em_atendimento: COLORS.verde, encerrada: COLORS.vermelho, concluido: COLORS.textFaint, orientacao_dada: COLORS.textFaint, cancelado: COLORS.vermelho };
   const c = map[status] || COLORS.textFaint;
   return <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 3, fontSize: 11.5, fontFamily: FONT_MONO, letterSpacing: 0.4, textTransform: "uppercase", color: c, border: `1px solid ${c}77`, background: c + "16", fontWeight: 700 }}>{STATUS_LABEL[status] || status}</span>;
 }
@@ -315,6 +319,7 @@ function OcorrenciaModal({ oc, onClose }) {
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <StatusChip status={oc.status} /><PrioridadeChip cls={oc.regulacao?.classificacao} /><TipoAtendimentoTags tipos={oc.tarm.tipoAtendimento} />
             {oc.obito && <span style={{ fontSize: 12, fontFamily: FONT_MONO, padding: "3px 9px", borderRadius: 4, background: COLORS.vermelho + "1E", color: COLORS.vermelho, border: `1px solid ${COLORS.vermelho}66`, fontWeight: 700 }}>ÓBITO {oc.obito}</span>}
+            {oc.motivoEncerramento && <span style={{ fontSize: 12, fontFamily: FONT_MONO, padding: "3px 9px", borderRadius: 4, background: COLORS.vermelho + "1E", color: COLORS.vermelho, border: `1px solid ${COLORS.vermelho}66`, fontWeight: 700 }}>ENCERRADA — {oc.motivoEncerramento}</span>}
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, fontSize: 14 }}>
             <div><span style={{ color: COLORS.textDim }}>Solicitante:</span> {oc.tarm.solicitante}</div>
@@ -659,7 +664,7 @@ function TarmView({ ocorrencias, onNovaOcorrencia, onCancelarOcorrencia, now }) 
    ============================================================ */
 function RegulacaoView({ ocorrencias, sessao, onRegular, onAbrir, onContraRegulacao, onAlterarClassificacao, onAlterarViatura, onAdicionarInfoComplementar, onCancelarRegulada, onDefinirUnidadeDestino }) {
   const fila = ocorrencias.filter((o) => o.status === "aguardando_regulacao").sort((a, b) => new Date(a.criadoEm) - new Date(b.criadoEm));
-  const emCurso = ocorrencias.filter((o) => ["aguardando_veiculo", "despachado", "em_atendimento"].includes(o.status));
+  const emCurso = ocorrencias.filter((o) => ["aguardando_veiculo", "despachado", "em_atendimento", "encerrada"].includes(o.status));
   const [ativa, setAtiva] = useState(null);
   const [avaliacao, setAvaliacao] = useState("");
   const [tipoClass, setTipoClass] = useState("");
@@ -708,7 +713,7 @@ function RegulacaoView({ ocorrencias, sessao, onRegular, onAbrir, onContraRegula
   // Fecha automaticamente o painel se a ocorrência sair da lista "em curso"
   // (por exemplo, quando a frota finaliza/libera a viatura ou a ocorrência é cancelada).
   useEffect(() => {
-    if (regulada && !["aguardando_veiculo", "despachado", "em_atendimento"].includes(regulada.status)) {
+    if (regulada && !["aguardando_veiculo", "despachado", "em_atendimento", "encerrada"].includes(regulada.status)) {
       setReguladaId(null); setAcao(null);
     }
   }, [regulada?.status]);
@@ -724,7 +729,49 @@ function RegulacaoView({ ocorrencias, sessao, onRegular, onAbrir, onContraRegula
   }
   function confirmarUnidadeDestino() { if (!novaUnidadeDestino || (novaUnidadeDestino === "OUTROS" && !novaUnidadeDestinoOutro.trim())) return; onDefinirUnidadeDestino(regulada.id, novaUnidadeDestino, novaUnidadeDestinoOutro); fecharRegulada(); }
 
+  const [abaRegulacao, setAbaRegulacao] = useState("regulacao");
+  const [filtroDataRegulacao, setFiltroDataRegulacao] = useState({ dia: "", mes: "", ano: "" });
+  const [paginaRegulacao, setPaginaRegulacao] = useState(1);
+  const tamanhoPaginaRegulacao = 30;
+  const [listaRegulacaoFiltrada, setListaRegulacaoFiltrada] = useState([]);
+  const [totalRegulacaoResultados, setTotalRegulacaoResultados] = useState(0);
+  const [carregandoPesquisaRegulacao, setCarregandoPesquisaRegulacao] = useState(false);
+
+  useEffect(() => { setPaginaRegulacao(1); }, [filtroDataRegulacao.dia, filtroDataRegulacao.mes, filtroDataRegulacao.ano]);
+
+  useEffect(() => {
+    if (abaRegulacao !== "pesquisa") return;
+    (async () => {
+      setCarregandoPesquisaRegulacao(true);
+      const { data, error } = await supabase.rpc("buscar_ocorrencias_paginado", {
+        p_pagina: paginaRegulacao, p_tamanho: tamanhoPaginaRegulacao,
+        p_dia: filtroDataRegulacao.dia ? Number(filtroDataRegulacao.dia) : null,
+        p_mes: filtroDataRegulacao.mes ? Number(filtroDataRegulacao.mes) : null,
+        p_ano: filtroDataRegulacao.ano ? Number(filtroDataRegulacao.ano) : null,
+      });
+      setCarregandoPesquisaRegulacao(false);
+      if (error) { setListaRegulacaoFiltrada([]); setTotalRegulacaoResultados(0); return; }
+      setListaRegulacaoFiltrada((data || []).map(ocorrenciaDoBanco));
+      setTotalRegulacaoResultados(data?.[0]?.total_count || 0);
+    })();
+  }, [abaRegulacao, paginaRegulacao, filtroDataRegulacao.dia, filtroDataRegulacao.mes, filtroDataRegulacao.ano]);
+
+  const totalPaginasRegulacao = Math.max(1, Math.ceil(totalRegulacaoResultados / tamanhoPaginaRegulacao));
+
   return (
+    <div style={{ display: "grid", gap: 16 }}>
+      <div style={{ display: "flex", gap: 6, borderBottom: `1px solid ${COLORS.line}`, marginBottom: 2 }}>
+        {[{ key: "regulacao", label: "Regulação", icon: Stethoscope }, { key: "pesquisa", label: "Pesquisa de Ocorrências", icon: Search }].map((a) => {
+          const Icon = a.icon; const ativaAba = abaRegulacao === a.key;
+          return (
+            <button key={a.key} onClick={() => setAbaRegulacao(a.key)} style={{ display: "flex", alignItems: "center", gap: 7, padding: "10px 15px", cursor: "pointer", background: "transparent", border: "none", borderBottom: ativaAba ? `2px solid ${COLORS.accent2}` : "2px solid transparent", color: ativaAba ? COLORS.text : COLORS.textFaint, fontFamily: FONT_DISPLAY, fontSize: 14, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 700 }}>
+              <Icon size={15} /> {a.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {abaRegulacao === "regulacao" && (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 16 }}>
       <Panel title="Fila de regulação médica" icon={Stethoscope} right={<span style={{ fontFamily: FONT_MONO, fontSize: 13, color: COLORS.amarelo, fontWeight: 700 }}>{fila.length} aguardando</span>}>
         <div style={{ display: "grid", gap: 9 }}>
@@ -785,6 +832,8 @@ function RegulacaoView({ ocorrencias, sessao, onRegular, onAbrir, onContraRegula
               <div style={{ marginTop: 4 }}>{ativa.tarm.queixa}</div>
               <div style={{ color: COLORS.textDim }}>{enderecoResumo(ativa.tarm)}</div>
               <div style={{ color: COLORS.textDim }}>Paciente: {ativa.tarm.nomePaciente} · {ativa.tarm.idade} {ativa.tarm.idadeUnidade === "meses" ? "meses" : "anos"} · {ativa.tarm.sexo}</div>
+              <div style={{ color: COLORS.textDim }}>Solicitante: {ativa.tarm.solicitante || "—"}</div>
+              {ativa.tarm.tipoLeito && <div style={{ color: COLORS.textDim }}>Tipo de Leito: {ativa.tarm.tipoLeito}</div>}
             </div>
 
             <Field label="Avaliação médica"><textarea style={{ ...inputStyle, minHeight: 90, resize: "vertical" }} value={avaliacao} onChange={(e) => setAvaliacao(e.target.value)} placeholder="Anamnese, sinais vitais relatados, histórico e demais dados da avaliação médica completa..." /></Field>
@@ -857,6 +906,8 @@ function RegulacaoView({ ocorrencias, sessao, onRegular, onAbrir, onContraRegula
                 <div style={{ marginTop: 4 }}>{regulada.tarm.queixa} <TipoAtendimentoTags tipos={regulada.tarm.tipoAtendimento} /></div>
                 <div style={{ color: COLORS.textDim }}>{enderecoResumo(regulada.tarm)}</div>
                 <div style={{ color: COLORS.textDim }}>Paciente: {regulada.tarm.nomePaciente} · {regulada.tarm.idade} {regulada.tarm.idadeUnidade === "meses" ? "meses" : "anos"} · {regulada.tarm.sexo}</div>
+                <div style={{ color: COLORS.textDim }}>Solicitante: {regulada.tarm.solicitante || "—"}</div>
+                {regulada.tarm.tipoLeito && <div style={{ color: COLORS.textDim }}>Tipo de Leito: {regulada.tarm.tipoLeito}</div>}
                 {regulada.regulacao?.avaliacao && <div style={{ marginTop: 6 }}><span style={{ color: COLORS.textDim }}>Avaliação:</span> {regulada.regulacao.avaliacao}</div>}
                 {regulada.regulacao?.tipoClassificacao && <div style={{ marginTop: 4 }}><span style={{ color: COLORS.textDim }}>Classificação:</span> {regulada.regulacao.tipoClassificacao} — {valorOutro(regulada.regulacao.motivoClassificacao, regulada.regulacao.motivoClassificacaoOutro)}</div>}
                 <div style={{ marginTop: 4 }}><span style={{ color: COLORS.textDim }}>Conduta / viatura indicada:</span> {CONDUTAS_MEDICAS.find((c) => c.key === regulada.regulacao?.conduta)?.label || "—"}</div>
@@ -936,15 +987,49 @@ function RegulacaoView({ ocorrencias, sessao, onRegular, onAbrir, onContraRegula
         })()}
       </Panel>
     </div>
+      )}
+
+      {abaRegulacao === "pesquisa" && (
+        <Panel title="Pesquisa de Ocorrências" icon={Search} right={
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <FiltroDataBar filtro={filtroDataRegulacao} setFiltro={setFiltroDataRegulacao} />
+            <span style={{ fontFamily: FONT_MONO, fontSize: 13, color: COLORS.accent2, fontWeight: 700 }}>{carregandoPesquisaRegulacao ? "Buscando..." : `${totalRegulacaoResultados} resultado(s)`}</span>
+          </div>
+        }>
+          <div style={{ display: "grid", gap: 7, minHeight: 200 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "100px 1fr 110px 110px 140px", fontSize: 11.5, color: COLORS.textFaint, textTransform: "uppercase", padding: "0 10px", fontFamily: FONT_MONO, fontWeight: 700 }}>
+              <span>Nº controle</span><span>Queixa / endereço</span><span>Prioridade</span><span>Status</span><span>Abertura</span>
+            </div>
+            {listaRegulacaoFiltrada.map((oc) => (
+              <div key={oc.id} onClick={() => onAbrir(oc)} style={{ cursor: "pointer", display: "grid", gridTemplateColumns: "100px 1fr 110px 110px 140px", alignItems: "center", padding: "9px 10px", background: COLORS.panel2, borderRadius: 5, fontSize: 13.5 }}>
+                <span style={{ fontFamily: FONT_MONO, color: COLORS.textDim, fontWeight: 700 }}>{oc.numeroControle}</span>
+                <span>{oc.tarm.queixa} <span style={{ color: COLORS.textFaint }}>— {enderecoResumo(oc.tarm)}</span></span>
+                <PrioridadeChip cls={oc.regulacao?.classificacao} />
+                <StatusChip status={oc.status} />
+                <span style={{ fontFamily: FONT_MONO, color: COLORS.textFaint }}>{fmtDataHora(oc.criadoEm)}</span>
+              </div>
+            ))}
+            {!carregandoPesquisaRegulacao && listaRegulacaoFiltrada.length === 0 && <div style={{ color: COLORS.textFaint, fontSize: 14, padding: 10 }}>Nenhuma ocorrência encontrada para o período pesquisado.</div>}
+          </div>
+          {totalRegulacaoResultados > tamanhoPaginaRegulacao && (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 14, paddingTop: 12, borderTop: `1px solid ${COLORS.line}` }}>
+              <Btn small kind="outline" disabled={paginaRegulacao <= 1} onClick={() => setPaginaRegulacao((p) => Math.max(1, p - 1))}>Anterior</Btn>
+              <span style={{ fontSize: 13, color: COLORS.textDim, fontFamily: FONT_MONO }}>Página {paginaRegulacao} de {totalPaginasRegulacao}</span>
+              <Btn small kind="outline" disabled={paginaRegulacao >= totalPaginasRegulacao} onClick={() => setPaginaRegulacao((p) => Math.min(totalPaginasRegulacao, p + 1))}>Próxima</Btn>
+            </div>
+          )}
+        </Panel>
+      )}
+    </div>
   );
 }
 
 /* ============================================================
    VIEW: FROTA / DESPACHO
    ============================================================ */
-function FrotaView({ ocorrencias, veiculos, onDespachar, onMarcarTempo, onAbrir, onAddVeiculo, onRemoveVeiculo, onUpdateVeiculo, onToggleStatus, onTrocarViatura, onAdicionarViaturaExtra, onRemoverViaturaOcorrencia, onCancelarOcorrenciaFrota, onRegistrarObito, onLiberarViatura }) {
+function FrotaView({ ocorrencias, veiculos, onDespachar, onMarcarTempo, onAbrir, onAddVeiculo, onRemoveVeiculo, onUpdateVeiculo, onToggleStatus, onTrocarViatura, onAdicionarViaturaExtra, onRemoverViaturaOcorrencia, onCancelarOcorrenciaFrota, onEncerrarOcorrencia, onLiberarViatura }) {
   const aguardandoVeiculo = ocorrencias.filter((o) => o.status === "aguardando_veiculo");
-  const emCurso = ocorrencias.filter((o) => ["despachado", "em_atendimento"].includes(o.status));
+  const emCurso = ocorrencias.filter((o) => ["despachado", "em_atendimento", "encerrada"].includes(o.status));
   const [selecionado, setSelecionado] = useState({});
   const [selecionadoTroca, setSelecionadoTroca] = useState({});
   const disponiveis = veiculos.filter((v) => v.status === "disponivel");
@@ -959,7 +1044,7 @@ function FrotaView({ ocorrencias, veiculos, onDespachar, onMarcarTempo, onAbrir,
   const [acaoOc, setAcaoOc] = useState({});
   const [extraSelecionada, setExtraSelecionada] = useState({});
   const [motivoCancelFrota, setMotivoCancelFrota] = useState({});
-  const [obitoSelecionado, setObitoSelecionado] = useState({});
+  const [motivoEncerramentoSel, setMotivoEncerramentoSel] = useState({});
   const [abaFrota, setAbaFrota] = useState("operacao");
   const [filtroDataFrota, setFiltroDataFrota] = useState({ dia: "", mes: "", ano: "" });
   const [paginaFrota, setPaginaFrota] = useState(1);
@@ -1082,7 +1167,8 @@ function FrotaView({ ocorrencias, veiculos, onDespachar, onMarcarTempo, onAbrir,
                       {oc.regulacao?.medico && <div style={{ fontSize: 12, color: COLORS.textDim, marginTop: 1 }}>Médico Regulador: {oc.regulacao.medico}</div>}
                       <div style={{ fontSize: 14.5, marginTop: 4, cursor: "pointer" }} onClick={() => onAbrir(oc)}>{oc.tarm.queixa}</div>
                       <div style={{ fontSize: 13.5, color: COLORS.text, marginTop: 2 }}><User size={12} style={{ verticalAlign: -2, marginRight: 3 }} />{oc.tarm.nomePaciente || "Paciente não informado"}</div>
-                      {oc.obito && <div style={{ fontSize: 12.5, color: COLORS.vermelho, marginTop: 2, fontWeight: 700 }}>ÓBITO — {oc.obito}</div>}
+                      {oc.motivoEncerramento && <div style={{ fontSize: 12.5, color: COLORS.vermelho, marginTop: 2, fontWeight: 700 }}>ENCERRADA — {oc.motivoEncerramento}</div>}
+                      {!oc.motivoEncerramento && oc.obito && <div style={{ fontSize: 12.5, color: COLORS.vermelho, marginTop: 2, fontWeight: 700 }}>ÓBITO — {oc.obito}</div>}
                     </div>
                     <StatusChip status={oc.status} />
                   </div>
@@ -1108,7 +1194,7 @@ function FrotaView({ ocorrencias, veiculos, onDespachar, onMarcarTempo, onAbrir,
 
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 6, marginTop: 10 }}>
                     <Btn small kind={ac === "add" ? "accent" : "outline"} onClick={() => setAcao(oc.id, "add")}>Adicionar/Remover Viatura</Btn>
-                    <Btn small kind={ac === "obito" ? "accent" : "outline"} onClick={() => setAcao(oc.id, "obito")} style={{ color: COLORS.vermelho, borderColor: ac === "obito" ? COLORS.vermelho : COLORS.vermelho }}>Óbito</Btn>
+                    <Btn small kind={ac === "encerrar" ? "accent" : "outline"} onClick={() => setAcao(oc.id, "encerrar")} style={{ color: COLORS.vermelho, borderColor: COLORS.vermelho }}>Encerrar Ocorrência</Btn>
                     <Btn small kind={ac === "cancelar" ? "accent" : "outline"} onClick={() => setAcao(oc.id, "cancelar")} style={{ color: COLORS.vermelho, borderColor: COLORS.vermelho }}>Cancelar Ocorrência</Btn>
                     <Btn small kind="accent" onClick={() => onLiberarViatura(oc.id)}><CheckCircle2 size={13} /> Liberar Viatura</Btn>
                   </div>
@@ -1132,14 +1218,23 @@ function FrotaView({ ocorrencias, veiculos, onDespachar, onMarcarTempo, onAbrir,
                       </div>
                     </div>
                   )}
-                  {ac === "obito" && (
+                  {ac === "encerrar" && (
                     <div style={{ marginTop: 8, padding: 9, background: COLORS.panel, border: `1px solid ${COLORS.vermelho}55`, borderRadius: 5 }}>
-                      <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-                        {["SVO", "IML"].map((op) => (
-                          <button key={op} type="button" onClick={() => setObitoSelecionado((s) => ({ ...s, [oc.id]: op }))} style={{ flex: 1, padding: "9px 6px", borderRadius: 5, cursor: "pointer", fontSize: 13, fontFamily: FONT_MONO, background: obitoSelecionado[oc.id] === op ? COLORS.vermelho : COLORS.panel2, color: obitoSelecionado[oc.id] === op ? "#fff" : COLORS.textDim, border: `1px solid ${obitoSelecionado[oc.id] === op ? COLORS.vermelho : COLORS.line}`, fontWeight: 700 }}>{op}</button>
-                        ))}
-                      </div>
-                      <Btn small disabled={!obitoSelecionado[oc.id]} onClick={() => { onRegistrarObito(oc.id, obitoSelecionado[oc.id]); setAcao(oc.id, "obito"); }} style={{ width: "100%", justifyContent: "center", background: COLORS.vermelho, color: "#fff", border: `1px solid ${COLORS.vermelho}` }}>Confirmar</Btn>
+                      <Field label="Motivo do encerramento">
+                        <select style={inputStyle} value={motivoEncerramentoSel[oc.id]?.motivo || ""} onChange={(e) => setMotivoEncerramentoSel((s) => ({ ...s, [oc.id]: { ...s[oc.id], motivo: e.target.value } }))}>
+                          <option value="">Selecionar</option>
+                          {MOTIVOS_ENCERRAMENTO.map((m) => <option key={m} value={m}>{m}</option>)}
+                        </select>
+                      </Field>
+                      {motivoEncerramentoSel[oc.id]?.motivo === "OUTROS" && (
+                        <Field label="Descreva o motivo">
+                          <textarea style={{ ...inputStyle, minHeight: 60, resize: "vertical" }} value={motivoEncerramentoSel[oc.id]?.outro || ""} onChange={(e) => setMotivoEncerramentoSel((s) => ({ ...s, [oc.id]: { ...s[oc.id], outro: e.target.value } }))} placeholder="Descreva o motivo do encerramento" />
+                        </Field>
+                      )}
+                      <Btn small
+                        disabled={!motivoEncerramentoSel[oc.id]?.motivo || (motivoEncerramentoSel[oc.id]?.motivo === "OUTROS" && !motivoEncerramentoSel[oc.id]?.outro?.trim())}
+                        onClick={() => { onEncerrarOcorrencia(oc.id, valorOutro(motivoEncerramentoSel[oc.id].motivo, motivoEncerramentoSel[oc.id].outro)); setMotivoEncerramentoSel((s) => ({ ...s, [oc.id]: null })); setAcao(oc.id, "encerrar"); }}
+                        style={{ width: "100%", justifyContent: "center", background: COLORS.vermelho, color: "#fff", border: `1px solid ${COLORS.vermelho}` }}>Confirmar encerramento</Btn>
                     </div>
                   )}
                   {ac === "cancelar" && (
@@ -1282,7 +1377,7 @@ function FrotaView({ ocorrencias, veiculos, onDespachar, onMarcarTempo, onAbrir,
    ============================================================ */
 function computeStats(lista, veiculos) {
   const total = lista.length;
-  const concluidas = lista.filter((o) => o.status === "concluido").length;
+  const concluidas = lista.filter((o) => o.status === "concluido" || o.status === "encerrada").length;
   const orientacoes = lista.filter((o) => o.status === "orientacao_dada").length;
   const trote = lista.filter((o) => o.motivoCancelamentoTarm === "TROTE").length;
   const canceladas = lista.filter((o) => o.status === "cancelado").length;
@@ -1772,6 +1867,7 @@ function ocorrenciaDoBanco(r) {
     regulacao: r.regulacao || {},
     despacho: r.despacho || {},
     obito: r.obito,
+    motivoEncerramento: r.motivo_encerramento,
     justificativaCancelamento: r.justificativa_cancelamento,
     motivoCancelamentoTarm: r.motivo_cancelamento_tarm,
     precisaTrocarViatura: r.precisa_trocar_viatura,
@@ -2069,11 +2165,15 @@ export default function App() {
     notificar("Ocorrência cancelada e viatura(s) liberada(s).");
   }
 
-  async function registrarObito(ocId, tipo) {
+  async function encerrarOcorrencia(ocId, motivo) {
     const o = buscarOc(ocId); if (!o) return;
     const ts = agora();
-    await atualizarOcorrencia(ocId, { obito: tipo, historico: [...o.historico, { ts, autor: autorAtual("Frota"), evento: `Óbito registrado — ${tipo}` }] });
-    notificar(`Óbito (${tipo}) registrado.`);
+    await atualizarOcorrencia(ocId, {
+      status: "encerrada",
+      motivo_encerramento: motivo,
+      historico: [...o.historico, { ts, autor: autorAtual("Frota"), evento: `Ocorrência encerrada — ${motivo}` }],
+    });
+    notificar("Ocorrência encerrada — aguardando liberação da viatura.");
   }
 
   async function liberarViatura(ocId) {
@@ -2227,7 +2327,7 @@ export default function App() {
 
           {papelEfetivo === "tarm" && <TarmView ocorrencias={ocorrencias} onNovaOcorrencia={criarOcorrencia} onCancelarOcorrencia={cancelarOcorrencia} now={now} />}
           {papelEfetivo === "regulacao" && <RegulacaoView ocorrencias={ocorrencias} sessao={sessao} onRegular={regular} onAbrir={setModalOc} onContraRegulacao={contraRegular} onAlterarClassificacao={alterarClassificacao} onAlterarViatura={alterarViatura} onAdicionarInfoComplementar={adicionarInfoComplementar} onCancelarRegulada={cancelarRegulada} onDefinirUnidadeDestino={definirUnidadeDestino} />}
-          {papelEfetivo === "frota" && <FrotaView ocorrencias={ocorrencias} veiculos={veiculos} onDespachar={despachar} onMarcarTempo={marcarTempo} onAbrir={setModalOc} onAddVeiculo={adicionarVeiculo} onRemoveVeiculo={removerVeiculo} onUpdateVeiculo={atualizarVeiculo} onToggleStatus={alternarStatusVeiculo} onTrocarViatura={trocarViatura} onAdicionarViaturaExtra={adicionarViaturaExtra} onRemoverViaturaOcorrencia={removerViaturaDaOcorrencia} onCancelarOcorrenciaFrota={cancelarOcorrenciaFrota} onRegistrarObito={registrarObito} onLiberarViatura={liberarViatura} />}
+          {papelEfetivo === "frota" && <FrotaView ocorrencias={ocorrencias} veiculos={veiculos} onDespachar={despachar} onMarcarTempo={marcarTempo} onAbrir={setModalOc} onAddVeiculo={adicionarVeiculo} onRemoveVeiculo={removerVeiculo} onUpdateVeiculo={atualizarVeiculo} onToggleStatus={alternarStatusVeiculo} onTrocarViatura={trocarViatura} onAdicionarViaturaExtra={adicionarViaturaExtra} onRemoverViaturaOcorrencia={removerViaturaDaOcorrencia} onCancelarOcorrenciaFrota={cancelarOcorrenciaFrota} onEncerrarOcorrencia={encerrarOcorrencia} onLiberarViatura={liberarViatura} />}
           {papelEfetivo === "gestao" && <GestaoView ocorrencias={ocorrencias} veiculos={veiculos} onAbrir={setModalOc} usuarios={usuarios} sessao={sessao} onCadastrarFuncionario={cadastrarFuncionario} onAtualizarFuncionario={atualizarFuncionario} onDefinirAtivoFuncionario={definirAtivoFuncionario} onRecarregarFuncionarios={recarregarUsuarios} />}
         </div>
       </div>
