@@ -1,23 +1,24 @@
 -- =====================================================================
 -- SAMU 192 Centro Sul — Central de Regulação
--- Script de criação do banco de dados no Supabase (Postgres)
--- Execute este arquivo inteiro em: Supabase > SQL Editor > New query > Run
+-- Script ÚNICO de criação do banco de dados no Supabase (Postgres)
+--
+-- Este arquivo substitui todos os scripts avulsos que existiam antes
+-- (schema.sql antigo + migracao_auth_real.sql + correcao_*.sql +
+-- paginacao_pesquisa_indicadores.sql + reforco_seguranca_promocao_admin.sql
+-- + adiciona_motivo_encerramento.sql). Eles continuam guardados, só por
+-- histórico, em supabase/historico_migracoes/ — mas não precisam mais
+-- ser executados: este arquivo já reflete o resultado final de todos.
+--
+-- Para um banco novo (do zero): rode este arquivo inteiro, uma vez, em
+-- Supabase > SQL Editor > New query > Run. Depois, siga o
+-- GUIA_MIGRACAO_AUTH.md para criar o primeiro administrador.
+--
+-- Para um banco que já existe (já rodou os scripts antigos, um por
+-- um): NÃO precisa rodar este arquivo — ele é equivalente ao que você
+-- já tem. Guarde-o só como referência do estado atual do banco.
 -- =====================================================================
 
 create extension if not exists pgcrypto;
-
--- ---------------------------------------------------------------------
--- TABELA: usuarios (funcionários / login)
--- ---------------------------------------------------------------------
-create table if not exists usuarios (
-  id uuid primary key default gen_random_uuid(),
-  nome text not null,
-  cpf text,
-  login text unique not null,
-  senha_hash text not null,
-  papel text not null check (papel in ('tarm','regulacao','frota','gestao','admin')),
-  criado_em timestamptz default now()
-);
 
 -- ---------------------------------------------------------------------
 -- TABELA: veiculos (frota)
@@ -27,7 +28,7 @@ create table if not exists veiculos (
   tipo text not null,
   base text,
   tripulantes text,
-  status text not null default 'disponivel', -- disponivel | em_deslocamento | ocupado | manutencao
+  status text not null default 'disponivel', -- disponivel(QRV) | em_deslocamento | ocupado | manutencao(FA)
   atualizado_em timestamptz default now()
 );
 
@@ -43,6 +44,7 @@ create table if not exists ocorrencias (
   regulacao jsonb not null default '{}',
   despacho jsonb not null default '{}',
   obito text,
+  motivo_encerramento text,
   justificativa_cancelamento text,
   motivo_cancelamento_tarm text,
   precisa_trocar_viatura boolean default false,
@@ -51,6 +53,14 @@ create table if not exists ocorrencias (
 
 create index if not exists idx_ocorrencias_status on ocorrencias(status);
 create index if not exists idx_ocorrencias_criado_em on ocorrencias(criado_em);
+
+-- Índices GIN: aceleram as buscas por campos dentro do JSON (queixa,
+-- endereço, município, classificação etc.), usadas pela função de
+-- pesquisa paginada. Sem isso, cada busca faz uma varredura completa
+-- da tabela — funciona igual com poucos dados, mas fica lento à
+-- medida que o histórico de ocorrências cresce.
+create index if not exists idx_ocorrencias_tarm_gin on ocorrencias using gin (tarm);
+create index if not exists idx_ocorrencias_regulacao_gin on ocorrencias using gin (regulacao);
 
 -- ---------------------------------------------------------------------
 -- Número de controle diário (reinicia sozinho a cada novo dia)
@@ -61,6 +71,12 @@ create table if not exists controle_diario (
 );
 alter table controle_diario enable row level security;
 
+drop policy if exists "bloquear tudo controle_diario" on controle_diario;
+create policy "bloquear tudo controle_diario" on controle_diario
+  for all using (false) with check (false);
+
+-- Roda com privilégio elevado (ignora a trava acima), pois é interno
+-- ao sistema — nunca é chamado direto pelo aplicativo.
 create or replace function gerar_numero_controle() returns trigger as $$
 declare
   hoje date := (now() at time zone 'America/Sao_Paulo')::date;
@@ -79,95 +95,200 @@ create trigger trg_numero_controle
 before insert on ocorrencias
 for each row execute function gerar_numero_controle();
 
-drop policy if exists "bloquear tudo controle_diario" on controle_diario;
-create policy "bloquear tudo controle_diario" on controle_diario for all using (false) with check (false);
+-- ---------------------------------------------------------------------
+-- TABELA: perfis — dados de cada funcionário (nome, CPF, função),
+-- ligada 1-para-1 com a conta de login do Supabase Auth (e-mail/senha).
+-- ---------------------------------------------------------------------
+create table if not exists perfis (
+  id uuid primary key references auth.users(id) on delete cascade,
+  nome text not null default '',
+  email text,
+  cpf text,
+  papel text not null default 'tarm' check (papel in ('tarm','regulacao','frota','gestao','admin','inativo')),
+  criado_em timestamptz default now()
+);
+
+-- Gatilho: toda vez que uma conta de login é criada (pelo painel do
+-- Supabase ou pela Edge Function "criar-funcionario"), o perfil
+-- correspondente é criado automaticamente, lendo nome/CPF/função dos
+-- metadados preenchidos na criação.
+create or replace function public.criar_perfil_automatico()
+returns trigger as $$
+begin
+  insert into public.perfis (id, nome, email, cpf, papel)
+  values (
+    new.id,
+    coalesce(new.raw_user_meta_data ->> 'nome', ''),
+    new.email,
+    new.raw_user_meta_data ->> 'cpf',
+    coalesce(new.raw_user_meta_data ->> 'papel', 'tarm')
+  )
+  on conflict (id) do nothing;
+  return new;
+end;
+$$ language plpgsql security definer set search_path = public;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.criar_perfil_automatico();
+
+-- Reforço de segurança: só um Administrador pode promover outro
+-- usuário a Administrador (mesmo em tentativas que não passem pela
+-- tela do sistema, direto pela API).
+create or replace function public.protege_promocao_admin()
+returns trigger as $$
+begin
+  if new.papel = 'admin' and coalesce(old.papel, '') <> 'admin' then
+    if not exists (select 1 from perfis p where p.id = auth.uid() and p.papel = 'admin') then
+      raise exception 'Somente um administrador pode promover outro usuário a administrador.';
+    end if;
+  end if;
+  return new;
+end;
+$$ language plpgsql security definer set search_path = public;
+
+drop trigger if exists trg_protege_promocao_admin on perfis;
+create trigger trg_protege_promocao_admin
+  before update on perfis
+  for each row execute function public.protege_promocao_admin();
 
 -- ---------------------------------------------------------------------
--- Autenticação (a senha nunca é enviada ao navegador — comparação
--- acontece dentro do banco, via bcrypt/pgcrypto)
+-- Segurança (RLS)
 -- ---------------------------------------------------------------------
-create or replace function autenticar_usuario(p_login text, p_senha text)
-returns table(id uuid, nome text, papel text, cpf text) as $$
+alter table perfis enable row level security;
+
+drop policy if exists "perfis leitura autenticados" on perfis;
+create policy "perfis leitura autenticados" on perfis
+  for select using (auth.role() = 'authenticated');
+
+drop policy if exists "perfis update por admin ou gestao" on perfis;
+create policy "perfis update por admin ou gestao" on perfis
+  for update using (
+    exists (select 1 from perfis p where p.id = auth.uid() and p.papel in ('admin','gestao'))
+  );
+
+drop policy if exists "perfis sem insert direto" on perfis;
+create policy "perfis sem insert direto" on perfis for insert with check (false);
+drop policy if exists "perfis sem delete direto" on perfis;
+create policy "perfis sem delete direto" on perfis for delete using (false);
+
+grant select on perfis to authenticated;
+grant update (nome, cpf, papel) on perfis to authenticated;
+
+-- Ocorrências e viaturas: exigem login de verdade (Supabase Auth) —
+-- não basta mais só ter a chave pública do site.
+alter table ocorrencias enable row level security;
+drop policy if exists "acesso ocorrencias" on ocorrencias;
+create policy "acesso ocorrencias" on ocorrencias
+  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+
+alter table veiculos enable row level security;
+drop policy if exists "acesso veiculos" on veiculos;
+create policy "acesso veiculos" on veiculos
+  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+
+-- ---------------------------------------------------------------------
+-- Funções de pesquisa (usadas pelas telas de Pesquisa/Indicadores)
+-- ---------------------------------------------------------------------
+
+-- Busca por período (Visão Geral / Indicadores): todas as ocorrências
+-- de um dia/mês/ano — cada parâmetro é opcional, combine como quiser.
+create or replace function buscar_ocorrencias_por_periodo(
+  p_dia int default null, p_mes int default null, p_ano int default null
+)
+returns setof ocorrencias as $$
+  select * from ocorrencias o
+  where (p_dia is null or extract(day from (o.criado_em at time zone 'America/Sao_Paulo')) = p_dia)
+    and (p_mes is null or extract(month from (o.criado_em at time zone 'America/Sao_Paulo')) = p_mes)
+    and (p_ano is null or extract(year from (o.criado_em at time zone 'America/Sao_Paulo')) = p_ano)
+  order by o.criado_em desc;
+$$ language sql stable security definer set search_path = public;
+
+grant execute on function buscar_ocorrencias_por_periodo(int, int, int) to authenticated;
+
+-- Busca paginada com todos os filtros (aba "Pesquisa de Ocorrências",
+-- usada por Regulação, Frota e Gestão). Devolve só a página pedida +
+-- o total de resultados encontrados.
+create or replace function buscar_ocorrencias_paginado(
+  p_pagina int default 1,
+  p_tamanho int default 30,
+  p_prioridade text default null,
+  p_dia int default null,
+  p_mes int default null,
+  p_ano int default null,
+  p_origem text default null,
+  p_destino text default null,
+  p_municipio text default null,
+  p_origem_ligacao text default null,
+  p_tipo_viatura text default null,
+  p_viatura text default null,
+  p_tipo_classificacao text default null,
+  p_motivo_classificacao text default null,
+  p_categoria text default null,
+  p_hora_inicio text default null,
+  p_hora_fim text default null,
+  p_busca text default null
+)
+returns table(
+  id uuid, numero_controle text, criado_em timestamptz, tarm jsonb, status text,
+  regulacao jsonb, despacho jsonb, obito text, motivo_encerramento text, justificativa_cancelamento text,
+  motivo_cancelamento_tarm text, precisa_trocar_viatura boolean, historico jsonb,
+  total_count bigint
+) as $$
+declare
+  v_offset int := greatest(0, (p_pagina - 1) * p_tamanho);
 begin
   return query
-    select u.id, u.nome, u.papel, u.cpf
-    from usuarios u
-    where u.login = p_login
-      and u.senha_hash = crypt(p_senha, u.senha_hash);
+  with filtrado as (
+    select o.*
+    from ocorrencias o
+    where
+      (p_prioridade is null or o.regulacao ->> 'classificacao' = p_prioridade)
+      and (p_dia is null or extract(day from (o.criado_em at time zone 'America/Sao_Paulo')) = p_dia)
+      and (p_mes is null or extract(month from (o.criado_em at time zone 'America/Sao_Paulo')) = p_mes)
+      and (p_ano is null or extract(year from (o.criado_em at time zone 'America/Sao_Paulo')) = p_ano)
+      and (p_origem is null or o.tarm ->> 'origem' = p_origem)
+      and (p_destino is null or o.tarm ->> 'destino' = p_destino or o.regulacao ->> 'unidadeDestino' = p_destino)
+      and (p_municipio is null or o.tarm ->> 'municipio' = p_municipio)
+      and (p_origem_ligacao is null or o.tarm ->> 'origemLigacao' = p_origem_ligacao)
+      and (p_tipo_viatura is null or exists (select 1 from veiculos v where v.id = (o.despacho ->> 'veiculoId') and v.tipo = p_tipo_viatura))
+      and (p_viatura is null or o.despacho ->> 'veiculoId' = p_viatura or (o.despacho -> 'veiculosExtras') ? p_viatura)
+      and (p_tipo_classificacao is null or o.regulacao ->> 'tipoClassificacao' = p_tipo_classificacao)
+      and (p_motivo_classificacao is null or o.regulacao ->> 'motivoClassificacao' = p_motivo_classificacao)
+      and (
+        p_categoria is null or p_categoria = ''
+        or (p_categoria = 'Óbito SVO' and o.obito = 'SVO')
+        or (p_categoria = 'Óbito IML' and o.obito = 'IML')
+        or (p_categoria = 'TROTE' and o.motivo_cancelamento_tarm = 'TROTE')
+        or (p_categoria = 'Orientação Médica' and o.status = 'orientacao_dada')
+        or (p_categoria = 'Ocorrências Canceladas' and o.status = 'cancelado')
+        or (p_categoria = 'Masculino' and o.tarm ->> 'sexo' = 'Masculino')
+        or (p_categoria = 'Feminino' and o.tarm ->> 'sexo' = 'Feminino')
+      )
+      and (p_hora_inicio is null or p_hora_inicio = '' or to_char(o.criado_em at time zone 'America/Sao_Paulo', 'HH24:MI') >= p_hora_inicio)
+      and (p_hora_fim is null or p_hora_fim = '' or to_char(o.criado_em at time zone 'America/Sao_Paulo', 'HH24:MI') <= p_hora_fim)
+      and (
+        p_busca is null or p_busca = ''
+        or o.numero_controle ilike '%' || p_busca || '%'
+        or (o.tarm ->> 'queixa') ilike '%' || p_busca || '%'
+        or (o.tarm ->> 'endereco') ilike '%' || p_busca || '%'
+        or (o.tarm ->> 'bairro') ilike '%' || p_busca || '%'
+        or (o.tarm ->> 'municipio') ilike '%' || p_busca || '%'
+      )
+  )
+  select f.id, f.numero_controle, f.criado_em, f.tarm, f.status, f.regulacao, f.despacho,
+         f.obito, f.motivo_encerramento, f.justificativa_cancelamento, f.motivo_cancelamento_tarm, f.precisa_trocar_viatura, f.historico,
+         (select count(*) from filtrado) as total_count
+  from filtrado f
+  order by f.criado_em desc
+  limit p_tamanho offset v_offset;
 end;
-$$ language plpgsql security definer;
+$$ language plpgsql stable security definer set search_path = public;
 
-create or replace function cadastrar_funcionario(p_nome text, p_cpf text, p_login text, p_senha text, p_papel text)
-returns uuid as $$
-declare novo_id uuid;
-begin
-  insert into usuarios (nome, cpf, login, senha_hash, papel)
-  values (p_nome, p_cpf, p_login, crypt(p_senha, gen_salt('bf')), p_papel)
-  returning id into novo_id;
-  return novo_id;
-end;
-$$ language plpgsql security definer;
-
-create or replace function atualizar_funcionario(p_id uuid, p_nome text, p_cpf text, p_login text, p_senha text, p_papel text)
-returns void as $$
-begin
-  if p_senha is null or length(trim(p_senha)) = 0 then
-    update usuarios set nome = p_nome, cpf = p_cpf, login = p_login, papel = p_papel where id = p_id;
-  else
-    update usuarios set nome = p_nome, cpf = p_cpf, login = p_login, papel = p_papel,
-      senha_hash = crypt(p_senha, gen_salt('bf')) where id = p_id;
-  end if;
-end;
-$$ language plpgsql security definer;
-
-create or replace function remover_funcionario(p_id uuid)
-returns void as $$
-begin
-  delete from usuarios where id = p_id;
-end;
-$$ language plpgsql security definer;
-
--- ---------------------------------------------------------------------
--- RLS (Row Level Security)
--- ---------------------------------------------------------------------
-alter table usuarios enable row level security;
-alter table veiculos enable row level security;
-alter table ocorrencias enable row level security;
-
--- usuarios: a tabela permite SELECT (política de linha), mas o acesso
--- de fato fica restrito às colunas não sensíveis via GRANT por coluna
--- logo abaixo — a senha (senha_hash) nunca é exposta pela API.
--- Cadastro/atualização/login só acontecem pelas funções acima
--- (que rodam com privilégio elevado via "security definer").
-drop policy if exists "bloquear tudo usuarios" on usuarios;
-create policy "usuarios leitura restrita a colunas seguras" on usuarios for select using (true);
-create policy "usuarios sem insert direto" on usuarios for insert with check (false);
-create policy "usuarios sem update direto" on usuarios for update using (false);
-create policy "usuarios sem delete direto" on usuarios for delete using (false);
-
--- Para a tela "Atualização cadastral" (buscar/listar funcionários) sem
--- expor a senha, criamos uma view somente com colunas seguras. Ela roda
--- com os privilégios de quem consulta (security_invoker), não do dono,
--- evitando o aviso de segurança "Security Definer View":
-create or replace view usuarios_publico as
-  select id, nome, cpf, login, papel, criado_em from usuarios;
-alter view usuarios_publico set (security_invoker = true);
-
-revoke select on usuarios from anon, authenticated;
-grant select (id, nome, cpf, login, papel, criado_em) on usuarios to anon, authenticated;
-grant select on usuarios_publico to anon, authenticated;
-grant execute on function autenticar_usuario(text, text) to anon, authenticated;
-grant execute on function cadastrar_funcionario(text, text, text, text, text) to anon, authenticated;
-grant execute on function atualizar_funcionario(uuid, text, text, text, text, text) to anon, authenticated;
-grant execute on function remover_funcionario(uuid) to anon, authenticated;
-
--- veiculos e ocorrencias: liberado para leitura/escrita via chave
--- publicável (uso interno da equipe). Ver observação de segurança no README.
-drop policy if exists "acesso veiculos" on veiculos;
-create policy "acesso veiculos" on veiculos for all using (true) with check (true);
-
-drop policy if exists "acesso ocorrencias" on ocorrencias;
-create policy "acesso ocorrencias" on ocorrencias for all using (true) with check (true);
+grant execute on function buscar_ocorrencias_paginado(
+  int, int, text, int, int, int, text, text, text, text, text, text, text, text, text, text, text, text
+) to authenticated;
 
 -- ---------------------------------------------------------------------
 -- Tempo real (para as telas sincronizarem sozinhas entre usuários)
@@ -176,16 +297,11 @@ alter publication supabase_realtime add table ocorrencias;
 alter publication supabase_realtime add table veiculos;
 
 -- ---------------------------------------------------------------------
--- DADOS INICIAIS (seed)
--- Mantemos apenas UMA conta de administrador para o primeiro acesso.
--- Todas as demais contas (TARM, Regulação, Frota, Gestão) devem ser
--- criadas pela própria tela "Cadastrar Funcionário", já logado como
--- administrador. TROQUE A SENHA ABAIXO assim que possível.
+-- DADOS INICIAIS (seed) — só a frota. Funcionários (perfis) não são
+-- semeados aqui porque dependem de uma conta de login já existir;
+-- crie o primeiro administrador pelo painel do Supabase, seguindo o
+-- GUIA_MIGRACAO_AUTH.md.
 -- ---------------------------------------------------------------------
-insert into usuarios (nome, login, senha_hash, papel) values
-  ('Administrador do Sistema', 'admin.samucs', crypt('admin.samucs@192', gen_salt('bf')), 'admin')
-on conflict (login) do nothing;
-
 insert into veiculos (id, tipo, base, tripulantes, status) values
   ('USB-01','USB','Base Centro','Cond. Marcos Silva, Téc. Enf. Renata Alves','disponivel'),
   ('USB-02','USB','Base Sul','Cond. Paulo Nunes, Téc. Enf. Camila Dias','disponivel'),

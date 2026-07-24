@@ -289,6 +289,86 @@ function FiltroDataBar({ filtro, setFiltro }) {
 /* ============================================================
    MODAL DE OCORRÊNCIA (visão completa / auditoria)
    ============================================================ */
+/* ============================================================
+   HOOK REUTILIZÁVEL: paginação (usado em Regulação, Frota,
+   Gestão e Funcionários — evita repetir a mesma lógica 4 vezes)
+   ============================================================ */
+function usePaginacao({ ativo, dependencias = [], tamanho = 30, buscar }) {
+  const buscarRef = useRef(buscar);
+  buscarRef.current = buscar; // sempre a versão mais recente, sem precisar de useCallback no chamador
+  const [pagina, setPagina] = useState(1);
+  const [lista, setLista] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [carregando, setCarregando] = useState(false);
+  const depsChave = JSON.stringify(dependencias);
+
+  useEffect(() => { setPagina(1); }, [depsChave]);
+
+  useEffect(() => {
+    if (!ativo) return;
+    let cancelado = false;
+    (async () => {
+      setCarregando(true);
+      const resultado = await buscarRef.current(pagina, tamanho);
+      if (cancelado) return;
+      setCarregando(false);
+      setLista(resultado?.lista || []);
+      setTotal(resultado?.total || 0);
+    })();
+    return () => { cancelado = true; };
+  }, [ativo, pagina, depsChave, tamanho]);
+
+  return { pagina, setPagina, lista, total, totalPaginas: Math.max(1, Math.ceil(total / tamanho)), carregando, tamanho };
+}
+
+/* Barra de abas reutilizável (Regulação, Frota e Gestão usavam cada
+   uma sua própria cópia do mesmo visual) */
+function TabBar({ abas, ativa, onMudar }) {
+  return (
+    <div style={{ display: "flex", gap: 6, borderBottom: `1px solid ${COLORS.line}`, marginBottom: 2 }}>
+      {abas.map((a) => {
+        const Icon = a.icon; const isAtiva = ativa === a.key;
+        return (
+          <button key={a.key} onClick={() => onMudar(a.key)} style={{ display: "flex", alignItems: "center", gap: 7, padding: "10px 15px", cursor: "pointer", background: "transparent", border: "none", borderBottom: isAtiva ? `2px solid ${COLORS.accent2}` : "2px solid transparent", color: isAtiva ? COLORS.text : COLORS.textFaint, fontFamily: FONT_DISPLAY, fontSize: 14, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 700 }}>
+            <Icon size={15} /> {a.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/* Tabela de resultados + controles de página, reutilizada nas 3
+   telas de "Pesquisa de Ocorrências" (Regulação, Frota e Gestão) */
+function ResultadosPaginados({ lista, carregando, pagina, totalPaginas, setPagina, tamanho, total, onAbrir, mensagemVazio }) {
+  return (
+    <>
+      <div style={{ display: "grid", gap: 7, minHeight: 200 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "100px 1fr 110px 110px 140px", fontSize: 11.5, color: COLORS.textFaint, textTransform: "uppercase", padding: "0 10px", fontFamily: FONT_MONO, fontWeight: 700 }}>
+          <span>Nº controle</span><span>Queixa / endereço</span><span>Prioridade</span><span>Status</span><span>Abertura</span>
+        </div>
+        {lista.map((oc) => (
+          <div key={oc.id} onClick={() => onAbrir(oc)} style={{ cursor: "pointer", display: "grid", gridTemplateColumns: "100px 1fr 110px 110px 140px", alignItems: "center", padding: "9px 10px", background: COLORS.panel2, borderRadius: 5, fontSize: 13.5 }}>
+            <span style={{ fontFamily: FONT_MONO, color: COLORS.textDim, fontWeight: 700 }}>{oc.numeroControle}</span>
+            <span>{oc.tarm.queixa} <span style={{ color: COLORS.textFaint }}>— {enderecoResumo(oc.tarm)}</span></span>
+            <PrioridadeChip cls={oc.regulacao?.classificacao} />
+            <StatusChip status={oc.status} />
+            <span style={{ fontFamily: FONT_MONO, color: COLORS.textFaint }}>{fmtDataHora(oc.criadoEm)}</span>
+          </div>
+        ))}
+        {!carregando && lista.length === 0 && <div style={{ color: COLORS.textFaint, fontSize: 14, padding: 10 }}>{mensagemVazio || "Nenhuma ocorrência encontrada para os critérios pesquisados."}</div>}
+      </div>
+      {total > tamanho && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 14, paddingTop: 12, borderTop: `1px solid ${COLORS.line}` }}>
+          <Btn small kind="outline" disabled={pagina <= 1} onClick={() => setPagina((p) => Math.max(1, p - 1))}>Anterior</Btn>
+          <span style={{ fontSize: 13, color: COLORS.textDim, fontFamily: FONT_MONO }}>Página {pagina} de {totalPaginas}</span>
+          <Btn small kind="outline" disabled={pagina >= totalPaginas} onClick={() => setPagina((p) => Math.min(totalPaginas, p + 1))}>Próxima</Btn>
+        </div>
+      )}
+    </>
+  );
+}
+
 function OcorrenciaModal({ oc, onClose }) {
   if (!oc) return null;
   const isT = oc.tarm.tipoAtendimento?.includes("TRANSPORTE");
@@ -731,45 +811,25 @@ function RegulacaoView({ ocorrencias, sessao, onRegular, onAbrir, onContraRegula
 
   const [abaRegulacao, setAbaRegulacao] = useState("regulacao");
   const [filtroDataRegulacao, setFiltroDataRegulacao] = useState({ dia: "", mes: "", ano: "" });
-  const [paginaRegulacao, setPaginaRegulacao] = useState(1);
-  const tamanhoPaginaRegulacao = 30;
-  const [listaRegulacaoFiltrada, setListaRegulacaoFiltrada] = useState([]);
-  const [totalRegulacaoResultados, setTotalRegulacaoResultados] = useState(0);
-  const [carregandoPesquisaRegulacao, setCarregandoPesquisaRegulacao] = useState(false);
-
-  useEffect(() => { setPaginaRegulacao(1); }, [filtroDataRegulacao.dia, filtroDataRegulacao.mes, filtroDataRegulacao.ano]);
-
-  useEffect(() => {
-    if (abaRegulacao !== "pesquisa") return;
-    (async () => {
-      setCarregandoPesquisaRegulacao(true);
-      const { data, error } = await supabase.rpc("buscar_ocorrencias_paginado", {
-        p_pagina: paginaRegulacao, p_tamanho: tamanhoPaginaRegulacao,
-        p_dia: filtroDataRegulacao.dia ? Number(filtroDataRegulacao.dia) : null,
-        p_mes: filtroDataRegulacao.mes ? Number(filtroDataRegulacao.mes) : null,
-        p_ano: filtroDataRegulacao.ano ? Number(filtroDataRegulacao.ano) : null,
-      });
-      setCarregandoPesquisaRegulacao(false);
-      if (error) { setListaRegulacaoFiltrada([]); setTotalRegulacaoResultados(0); return; }
-      setListaRegulacaoFiltrada((data || []).map(ocorrenciaDoBanco));
-      setTotalRegulacaoResultados(data?.[0]?.total_count || 0);
-    })();
-  }, [abaRegulacao, paginaRegulacao, filtroDataRegulacao.dia, filtroDataRegulacao.mes, filtroDataRegulacao.ano]);
-
-  const totalPaginasRegulacao = Math.max(1, Math.ceil(totalRegulacaoResultados / tamanhoPaginaRegulacao));
+  const buscarPaginaRegulacao = async (pagina, tamanho) => {
+    const { data, error } = await supabase.rpc("buscar_ocorrencias_paginado", {
+      p_pagina: pagina, p_tamanho: tamanho,
+      p_dia: filtroDataRegulacao.dia ? Number(filtroDataRegulacao.dia) : null,
+      p_mes: filtroDataRegulacao.mes ? Number(filtroDataRegulacao.mes) : null,
+      p_ano: filtroDataRegulacao.ano ? Number(filtroDataRegulacao.ano) : null,
+    });
+    if (error) return { lista: [], total: 0 };
+    return { lista: (data || []).map(ocorrenciaDoBanco), total: data?.[0]?.total_count || 0 };
+  };
+  const pesquisaRegulacao = usePaginacao({
+    ativo: abaRegulacao === "pesquisa",
+    dependencias: [filtroDataRegulacao.dia, filtroDataRegulacao.mes, filtroDataRegulacao.ano],
+    buscar: buscarPaginaRegulacao,
+  });
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
-      <div style={{ display: "flex", gap: 6, borderBottom: `1px solid ${COLORS.line}`, marginBottom: 2 }}>
-        {[{ key: "regulacao", label: "Regulação", icon: Stethoscope }, { key: "pesquisa", label: "Pesquisa de Ocorrências", icon: Search }].map((a) => {
-          const Icon = a.icon; const ativaAba = abaRegulacao === a.key;
-          return (
-            <button key={a.key} onClick={() => setAbaRegulacao(a.key)} style={{ display: "flex", alignItems: "center", gap: 7, padding: "10px 15px", cursor: "pointer", background: "transparent", border: "none", borderBottom: ativaAba ? `2px solid ${COLORS.accent2}` : "2px solid transparent", color: ativaAba ? COLORS.text : COLORS.textFaint, fontFamily: FONT_DISPLAY, fontSize: 14, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 700 }}>
-              <Icon size={15} /> {a.label}
-            </button>
-          );
-        })}
-      </div>
+      <TabBar abas={[{ key: "regulacao", label: "Regulação", icon: Stethoscope }, { key: "pesquisa", label: "Pesquisa de Ocorrências", icon: Search }]} ativa={abaRegulacao} onMudar={setAbaRegulacao} />
 
       {abaRegulacao === "regulacao" && (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 16 }}>
@@ -993,31 +1053,10 @@ function RegulacaoView({ ocorrencias, sessao, onRegular, onAbrir, onContraRegula
         <Panel title="Pesquisa de Ocorrências" icon={Search} right={
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <FiltroDataBar filtro={filtroDataRegulacao} setFiltro={setFiltroDataRegulacao} />
-            <span style={{ fontFamily: FONT_MONO, fontSize: 13, color: COLORS.accent2, fontWeight: 700 }}>{carregandoPesquisaRegulacao ? "Buscando..." : `${totalRegulacaoResultados} resultado(s)`}</span>
+            <span style={{ fontFamily: FONT_MONO, fontSize: 13, color: COLORS.accent2, fontWeight: 700 }}>{pesquisaRegulacao.carregando ? "Buscando..." : `${pesquisaRegulacao.total} resultado(s)`}</span>
           </div>
         }>
-          <div style={{ display: "grid", gap: 7, minHeight: 200 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "100px 1fr 110px 110px 140px", fontSize: 11.5, color: COLORS.textFaint, textTransform: "uppercase", padding: "0 10px", fontFamily: FONT_MONO, fontWeight: 700 }}>
-              <span>Nº controle</span><span>Queixa / endereço</span><span>Prioridade</span><span>Status</span><span>Abertura</span>
-            </div>
-            {listaRegulacaoFiltrada.map((oc) => (
-              <div key={oc.id} onClick={() => onAbrir(oc)} style={{ cursor: "pointer", display: "grid", gridTemplateColumns: "100px 1fr 110px 110px 140px", alignItems: "center", padding: "9px 10px", background: COLORS.panel2, borderRadius: 5, fontSize: 13.5 }}>
-                <span style={{ fontFamily: FONT_MONO, color: COLORS.textDim, fontWeight: 700 }}>{oc.numeroControle}</span>
-                <span>{oc.tarm.queixa} <span style={{ color: COLORS.textFaint }}>— {enderecoResumo(oc.tarm)}</span></span>
-                <PrioridadeChip cls={oc.regulacao?.classificacao} />
-                <StatusChip status={oc.status} />
-                <span style={{ fontFamily: FONT_MONO, color: COLORS.textFaint }}>{fmtDataHora(oc.criadoEm)}</span>
-              </div>
-            ))}
-            {!carregandoPesquisaRegulacao && listaRegulacaoFiltrada.length === 0 && <div style={{ color: COLORS.textFaint, fontSize: 14, padding: 10 }}>Nenhuma ocorrência encontrada para o período pesquisado.</div>}
-          </div>
-          {totalRegulacaoResultados > tamanhoPaginaRegulacao && (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 14, paddingTop: 12, borderTop: `1px solid ${COLORS.line}` }}>
-              <Btn small kind="outline" disabled={paginaRegulacao <= 1} onClick={() => setPaginaRegulacao((p) => Math.max(1, p - 1))}>Anterior</Btn>
-              <span style={{ fontSize: 13, color: COLORS.textDim, fontFamily: FONT_MONO }}>Página {paginaRegulacao} de {totalPaginasRegulacao}</span>
-              <Btn small kind="outline" disabled={paginaRegulacao >= totalPaginasRegulacao} onClick={() => setPaginaRegulacao((p) => Math.min(totalPaginasRegulacao, p + 1))}>Próxima</Btn>
-            </div>
-          )}
+          <ResultadosPaginados {...pesquisaRegulacao} onAbrir={onAbrir} mensagemVazio="Nenhuma ocorrência encontrada para o período pesquisado." />
         </Panel>
       )}
     </div>
@@ -1047,32 +1086,21 @@ function FrotaView({ ocorrencias, veiculos, onDespachar, onMarcarTempo, onAbrir,
   const [motivoEncerramentoSel, setMotivoEncerramentoSel] = useState({});
   const [abaFrota, setAbaFrota] = useState("operacao");
   const [filtroDataFrota, setFiltroDataFrota] = useState({ dia: "", mes: "", ano: "" });
-  const [paginaFrota, setPaginaFrota] = useState(1);
-  const tamanhoPaginaFrota = 30;
-  const [listaFrotaFiltrada, setListaFrotaFiltrada] = useState([]);
-  const [totalFrotaResultados, setTotalFrotaResultados] = useState(0);
-  const [carregandoPesquisaFrota, setCarregandoPesquisaFrota] = useState(false);
-
-  useEffect(() => { setPaginaFrota(1); }, [filtroDataFrota.dia, filtroDataFrota.mes, filtroDataFrota.ano]);
-
-  useEffect(() => {
-    if (abaFrota !== "pesquisa") return;
-    (async () => {
-      setCarregandoPesquisaFrota(true);
-      const { data, error } = await supabase.rpc("buscar_ocorrencias_paginado", {
-        p_pagina: paginaFrota, p_tamanho: tamanhoPaginaFrota,
-        p_dia: filtroDataFrota.dia ? Number(filtroDataFrota.dia) : null,
-        p_mes: filtroDataFrota.mes ? Number(filtroDataFrota.mes) : null,
-        p_ano: filtroDataFrota.ano ? Number(filtroDataFrota.ano) : null,
-      });
-      setCarregandoPesquisaFrota(false);
-      if (error) { setListaFrotaFiltrada([]); setTotalFrotaResultados(0); return; }
-      setListaFrotaFiltrada((data || []).map(ocorrenciaDoBanco));
-      setTotalFrotaResultados(data?.[0]?.total_count || 0);
-    })();
-  }, [abaFrota, paginaFrota, filtroDataFrota.dia, filtroDataFrota.mes, filtroDataFrota.ano]);
-
-  const totalPaginasFrota = Math.max(1, Math.ceil(totalFrotaResultados / tamanhoPaginaFrota));
+  const buscarPaginaFrota = async (pagina, tamanho) => {
+    const { data, error } = await supabase.rpc("buscar_ocorrencias_paginado", {
+      p_pagina: pagina, p_tamanho: tamanho,
+      p_dia: filtroDataFrota.dia ? Number(filtroDataFrota.dia) : null,
+      p_mes: filtroDataFrota.mes ? Number(filtroDataFrota.mes) : null,
+      p_ano: filtroDataFrota.ano ? Number(filtroDataFrota.ano) : null,
+    });
+    if (error) return { lista: [], total: 0 };
+    return { lista: (data || []).map(ocorrenciaDoBanco), total: data?.[0]?.total_count || 0 };
+  };
+  const pesquisaFrota = usePaginacao({
+    ativo: abaFrota === "pesquisa",
+    dependencias: [filtroDataFrota.dia, filtroDataFrota.mes, filtroDataFrota.ano],
+    buscar: buscarPaginaFrota,
+  });
 
   function setAcao(ocId, acao) { setAcaoOc((s) => ({ ...s, [ocId]: s[ocId] === acao ? null : acao })); }
 
@@ -1082,16 +1110,7 @@ function FrotaView({ ocorrencias, veiculos, onDespachar, onMarcarTempo, onAbrir,
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
-      <div style={{ display: "flex", gap: 6, borderBottom: `1px solid ${COLORS.line}`, marginBottom: 2 }}>
-        {[{ key: "operacao", label: "Operação de Frota", icon: Truck }, { key: "pesquisa", label: "Pesquisa de Ocorrências", icon: Search }].map((a) => {
-          const Icon = a.icon; const ativa = abaFrota === a.key;
-          return (
-            <button key={a.key} onClick={() => setAbaFrota(a.key)} style={{ display: "flex", alignItems: "center", gap: 7, padding: "10px 15px", cursor: "pointer", background: "transparent", border: "none", borderBottom: ativa ? `2px solid ${COLORS.accent2}` : "2px solid transparent", color: ativa ? COLORS.text : COLORS.textFaint, fontFamily: FONT_DISPLAY, fontSize: 14, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 700 }}>
-              <Icon size={15} /> {a.label}
-            </button>
-          );
-        })}
-      </div>
+      <TabBar abas={[{ key: "operacao", label: "Operação de Frota", icon: Truck }, { key: "pesquisa", label: "Pesquisa de Ocorrências", icon: Search }]} ativa={abaFrota} onMudar={setAbaFrota} />
 
       {abaFrota === "operacao" && (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
@@ -1325,31 +1344,10 @@ function FrotaView({ ocorrencias, veiculos, onDespachar, onMarcarTempo, onAbrir,
         <Panel title="Pesquisa de Ocorrências" icon={Search} right={
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <FiltroDataBar filtro={filtroDataFrota} setFiltro={setFiltroDataFrota} />
-            <span style={{ fontFamily: FONT_MONO, fontSize: 13, color: COLORS.accent2, fontWeight: 700 }}>{carregandoPesquisaFrota ? "Buscando..." : `${totalFrotaResultados} resultado(s)`}</span>
+            <span style={{ fontFamily: FONT_MONO, fontSize: 13, color: COLORS.accent2, fontWeight: 700 }}>{pesquisaFrota.carregando ? "Buscando..." : `${pesquisaFrota.total} resultado(s)`}</span>
           </div>
         }>
-          <div style={{ display: "grid", gap: 7, minHeight: 200 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "100px 1fr 110px 110px 140px", fontSize: 11.5, color: COLORS.textFaint, textTransform: "uppercase", padding: "0 10px", fontFamily: FONT_MONO, fontWeight: 700 }}>
-              <span>Nº controle</span><span>Queixa / endereço</span><span>Prioridade</span><span>Status</span><span>Abertura</span>
-            </div>
-            {listaFrotaFiltrada.map((oc) => (
-              <div key={oc.id} onClick={() => onAbrir(oc)} style={{ cursor: "pointer", display: "grid", gridTemplateColumns: "100px 1fr 110px 110px 140px", alignItems: "center", padding: "9px 10px", background: COLORS.panel2, borderRadius: 5, fontSize: 13.5 }}>
-                <span style={{ fontFamily: FONT_MONO, color: COLORS.textDim, fontWeight: 700 }}>{oc.numeroControle}</span>
-                <span>{oc.tarm.queixa} <span style={{ color: COLORS.textFaint }}>— {enderecoResumo(oc.tarm)}</span></span>
-                <PrioridadeChip cls={oc.regulacao?.classificacao} />
-                <StatusChip status={oc.status} />
-                <span style={{ fontFamily: FONT_MONO, color: COLORS.textFaint }}>{fmtDataHora(oc.criadoEm)}</span>
-              </div>
-            ))}
-            {!carregandoPesquisaFrota && listaFrotaFiltrada.length === 0 && <div style={{ color: COLORS.textFaint, fontSize: 14, padding: 10 }}>Nenhuma ocorrência encontrada para o período pesquisado.</div>}
-          </div>
-          {totalFrotaResultados > tamanhoPaginaFrota && (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 14, paddingTop: 12, borderTop: `1px solid ${COLORS.line}` }}>
-              <Btn small kind="outline" disabled={paginaFrota <= 1} onClick={() => setPaginaFrota((p) => Math.max(1, p - 1))}>Anterior</Btn>
-              <span style={{ fontSize: 13, color: COLORS.textDim, fontFamily: FONT_MONO }}>Página {paginaFrota} de {totalPaginasFrota}</span>
-              <Btn small kind="outline" disabled={paginaFrota >= totalPaginasFrota} onClick={() => setPaginaFrota((p) => Math.min(totalPaginasFrota, p + 1))}>Próxima</Btn>
-            </div>
-          )}
+          <ResultadosPaginados {...pesquisaFrota} onAbrir={onAbrir} mensagemVazio="Nenhuma ocorrência encontrada para o período pesquisado." />
         </Panel>
       )}
 
@@ -1543,20 +1541,38 @@ function DashboardBlock({ stats, totalVeiculos }) {
 /* ============================================================
    PAINEL DE FUNCIONÁRIOS (cadastro e atualização cadastral)
    ============================================================ */
-function FuncionariosPanel({ usuarios, sessao, onCadastrar, onAtualizar, onDefinirAtivo }) {
+async function buscarPaginaFuncionarios(pagina, tamanho, busca, souAdmin) {
+  let query = supabase.from("perfis").select("*", { count: "exact" }).order("nome").range((pagina - 1) * tamanho, pagina * tamanho - 1);
+  if (!souAdmin) query = query.neq("papel", "admin");
+  if (busca?.trim()) {
+    const termo = busca.trim().replace(/[,()]/g, " ");
+    query = query.or(`nome.ilike.%${termo}%,email.ilike.%${termo}%,cpf.ilike.%${termo}%`);
+  }
+  const { data, error, count } = await query;
+  if (error) return { lista: [], total: 0 };
+  return { lista: data || [], total: count || 0 };
+}
+
+function FuncionariosPanel({ sessao, onCadastrar, onAtualizar, onDefinirAtivo }) {
   const [novo, setNovo] = useState({ nome: "", cpf: "", email: "", senha: "", papel: "tarm" });
   const [erro, setErro] = useState("");
   const [sucesso, setSucesso] = useState("");
   const [enviando, setEnviando] = useState(false);
   const [busca, setBusca] = useState("");
+  const [buscaAtrasada, setBuscaAtrasada] = useState("");
+  const [versao, setVersao] = useState(0);
   const [editando, setEditando] = useState(null);
   const [rascunho, setRascunho] = useState(null);
 
-  const listaVisivel = usuarios.filter((u) => u.papel !== "admin" || u.id === sessao?.id);
-  const resultados = listaVisivel.filter((u) => !busca.trim() || u.nome.toLowerCase().includes(busca.toLowerCase()) || (u.cpf || "").includes(busca.trim()) || (u.email || "").toLowerCase().includes(busca.toLowerCase()));
+  useEffect(() => { const t = setTimeout(() => setBuscaAtrasada(busca), 400); return () => clearTimeout(t); }, [busca]);
+
+  const souAdmin = sessao?.papel === "admin";
+  const buscarFn = (pagina, tamanho) => buscarPaginaFuncionarios(pagina, tamanho, buscaAtrasada, souAdmin);
+  const pesquisa = usePaginacao({ ativo: true, dependencias: [buscaAtrasada, versao, souAdmin], buscar: buscarFn, tamanho: 20 });
 
   function abrirEdicao(u) { setEditando(u.id); setRascunho({ ...u }); }
-  function salvarEdicao() { if (!rascunho.nome.trim()) return; onAtualizar(editando, rascunho); setEditando(null); }
+  async function salvarEdicao() { if (!rascunho.nome.trim()) return; await onAtualizar(editando, rascunho); setEditando(null); setVersao((v) => v + 1); }
+  async function ativarDesativar(ativo) { await onDefinirAtivo(editando, ativo, rascunho.papel); setEditando(null); setVersao((v) => v + 1); }
 
   async function cadastrar() {
     if (!novo.nome.trim() || !novo.email.trim() || !novo.senha) { setErro("Preencha nome, e-mail e senha."); return; }
@@ -1566,6 +1582,7 @@ function FuncionariosPanel({ usuarios, sessao, onCadastrar, onAtualizar, onDefin
     setEnviando(false);
     setSucesso(`Funcionário "${novo.nome}" cadastrado como ${PAPEIS.find((p) => p.key === novo.papel)?.label || novo.papel}.`);
     setNovo({ nome: "", cpf: "", email: "", senha: "", papel: "tarm" });
+    setVersao((v) => v + 1);
   }
 
   return (
@@ -1582,7 +1599,7 @@ function FuncionariosPanel({ usuarios, sessao, onCadastrar, onAtualizar, onDefin
         <Field label="Função">
           <select style={inputStyle} value={novo.papel} onChange={(e) => setNovo((f) => ({ ...f, papel: e.target.value }))}>
             {PAPEIS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
-            {sessao?.papel === "admin" && <option value="admin">Administrador</option>}
+            {souAdmin && <option value="admin">Administrador</option>}
           </select>
         </Field>
         {erro && <div style={{ color: COLORS.vermelho, fontSize: 13, marginBottom: 10 }}>{erro}</div>}
@@ -1596,8 +1613,11 @@ function FuncionariosPanel({ usuarios, sessao, onCadastrar, onAtualizar, onDefin
       </div>
 
       <Field label="Buscar funcionário por nome, e-mail ou CPF"><input style={inputStyle} value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Digite para buscar" /></Field>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+        <span style={{ fontFamily: FONT_MONO, fontSize: 12.5, color: COLORS.accent2, fontWeight: 700 }}>{pesquisa.carregando ? "Buscando..." : `${pesquisa.total} funcionário(s)`}</span>
+      </div>
       <div style={{ display: "grid", gap: 8 }}>
-        {resultados.map((u) => (
+        {pesquisa.lista.map((u) => (
           <div key={u.id} onClick={() => abrirEdicao(u)} style={{ cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", background: u.papel === "inativo" ? COLORS.panel2 : COLORS.panel, border: `1px solid ${COLORS.line}`, borderRadius: 6, opacity: u.papel === "inativo" ? 0.6 : 1 }}>
             <div>
               <div style={{ fontSize: 14, fontWeight: 700 }}>{u.nome || "(sem nome)"} {u.papel === "inativo" && <span style={{ color: COLORS.vermelho, fontSize: 11 }}>· DESATIVADO</span>}</div>
@@ -1606,8 +1626,15 @@ function FuncionariosPanel({ usuarios, sessao, onCadastrar, onAtualizar, onDefin
             <span style={{ fontSize: 12, color: COLORS.accent2, fontFamily: FONT_MONO, fontWeight: 700 }}>{PAPEIS.find((p) => p.key === u.papel)?.label || u.papel}</span>
           </div>
         ))}
-        {resultados.length === 0 && <div style={{ color: COLORS.textFaint, fontSize: 13.5 }}>Nenhum funcionário encontrado.</div>}
+        {!pesquisa.carregando && pesquisa.lista.length === 0 && <div style={{ color: COLORS.textFaint, fontSize: 13.5 }}>Nenhum funcionário encontrado.</div>}
       </div>
+      {pesquisa.total > pesquisa.tamanho && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 14, paddingTop: 12, borderTop: `1px solid ${COLORS.line}` }}>
+          <Btn small kind="outline" disabled={pesquisa.pagina <= 1} onClick={() => pesquisa.setPagina((p) => Math.max(1, p - 1))}>Anterior</Btn>
+          <span style={{ fontSize: 13, color: COLORS.textDim, fontFamily: FONT_MONO }}>Página {pesquisa.pagina} de {pesquisa.totalPaginas}</span>
+          <Btn small kind="outline" disabled={pesquisa.pagina >= pesquisa.totalPaginas} onClick={() => pesquisa.setPagina((p) => Math.min(pesquisa.totalPaginas, p + 1))}>Próxima</Btn>
+        </div>
+      )}
 
       {editando && rascunho && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(20,23,31,0.55)", zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={() => setEditando(null)}>
@@ -1623,9 +1650,9 @@ function FuncionariosPanel({ usuarios, sessao, onCadastrar, onAtualizar, onDefin
             <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
               <Btn kind="accent" onClick={salvarEdicao} style={{ flex: 1, justifyContent: "center" }}><Save size={15} /> Salvar alterações</Btn>
               {rascunho.papel === "inativo" ? (
-                <Btn onClick={() => { onDefinirAtivo(editando, true, rascunho.papel); setEditando(null); }} style={{ background: COLORS.verde, color: "#fff", border: `1px solid ${COLORS.verde}` }}>Reativar acesso</Btn>
+                <Btn onClick={() => ativarDesativar(true)} style={{ background: COLORS.verde, color: "#fff", border: `1px solid ${COLORS.verde}` }}>Reativar acesso</Btn>
               ) : (
-                <Btn onClick={() => { onDefinirAtivo(editando, false, rascunho.papel); setEditando(null); }} style={{ background: COLORS.vermelho, color: "#fff", border: `1px solid ${COLORS.vermelho}` }}>Desativar acesso</Btn>
+                <Btn onClick={() => ativarDesativar(false)} style={{ background: COLORS.vermelho, color: "#fff", border: `1px solid ${COLORS.vermelho}` }}>Desativar acesso</Btn>
               )}
             </div>
           </div>
@@ -1638,11 +1665,9 @@ function FuncionariosPanel({ usuarios, sessao, onCadastrar, onAtualizar, onDefin
 /* ============================================================
    VIEW: GESTÃO
    ============================================================ */
-function GestaoView({ ocorrencias, veiculos, onAbrir, usuarios, sessao, onCadastrarFuncionario, onAtualizarFuncionario, onDefinirAtivoFuncionario, onRecarregarFuncionarios }) {
+function GestaoView({ ocorrencias, veiculos, onAbrir, sessao, onCadastrarFuncionario, onAtualizarFuncionario, onDefinirAtivoFuncionario }) {
   const [aba, setAba] = useState("visao");
   const now = new Date();
-
-  useEffect(() => { if (aba === "funcionarios" && onRecarregarFuncionarios) onRecarregarFuncionarios(); }, [aba]);
 
   const ocorrenciasHoje = ocorrencias.filter((o) => mesmaData(o.criadoEm, now));
   const statsHoje = computeStats(ocorrenciasHoje, veiculos);
@@ -1683,11 +1708,7 @@ function GestaoView({ ocorrencias, veiculos, onAbrir, usuarios, sessao, onCadast
   const [horaInicio, setHoraInicio] = useState("");
   const [horaFim, setHoraFim] = useState("");
 
-  const [pagina, setPagina] = useState(1);
   const tamanhoPagina = 30;
-  const [listaFiltrada, setListaFiltrada] = useState([]);
-  const [totalResultados, setTotalResultados] = useState(0);
-  const [carregandoPesquisa, setCarregandoPesquisa] = useState(false);
 
   // Espera meio segundo sem digitar antes de buscar (evita disparar uma
   // busca no banco a cada letra digitada).
@@ -1695,57 +1716,43 @@ function GestaoView({ ocorrencias, veiculos, onAbrir, usuarios, sessao, onCadast
 
   const filtrosPesquisa = [filtroPrioridade, filtroData.dia, filtroData.mes, filtroData.ano, filtroOrigem, filtroDestino, filtroMunicipio, filtroOrigemLigacao, filtroTipoViatura, filtroViatura, filtroTipoClass, filtroMotivoClass, filtroCategoria, horaInicio, horaFim, buscaAtrasada];
 
-  useEffect(() => { setPagina(1); }, filtrosPesquisa);
-
-  useEffect(() => {
-    if (aba !== "pesquisa") return;
-    (async () => {
-      setCarregandoPesquisa(true);
-      const { data, error } = await supabase.rpc("buscar_ocorrencias_paginado", {
-        p_pagina: pagina, p_tamanho: tamanhoPagina,
-        p_prioridade: filtroPrioridade !== "todas" ? filtroPrioridade : null,
-        p_dia: filtroData.dia ? Number(filtroData.dia) : null,
-        p_mes: filtroData.mes ? Number(filtroData.mes) : null,
-        p_ano: filtroData.ano ? Number(filtroData.ano) : null,
-        p_origem: filtroOrigem || null,
-        p_destino: filtroDestino || null,
-        p_municipio: filtroMunicipio || null,
-        p_origem_ligacao: filtroOrigemLigacao || null,
-        p_tipo_viatura: filtroTipoViatura || null,
-        p_viatura: filtroViatura || null,
-        p_tipo_classificacao: filtroTipoClass || null,
-        p_motivo_classificacao: filtroMotivoClass || null,
-        p_categoria: filtroCategoria || null,
-        p_hora_inicio: horaInicio || null,
-        p_hora_fim: horaFim || null,
-        p_busca: buscaAtrasada || null,
-      });
-      setCarregandoPesquisa(false);
-      if (error) { setListaFiltrada([]); setTotalResultados(0); return; }
-      setListaFiltrada((data || []).map(ocorrenciaDoBanco));
-      setTotalResultados(data?.[0]?.total_count || 0);
-    })();
-  }, [aba, pagina, ...filtrosPesquisa]);
-
-  const totalPaginas = Math.max(1, Math.ceil(totalResultados / tamanhoPagina));
+  const buscarPaginaGestao = async (pagina, tamanho) => {
+    const { data, error } = await supabase.rpc("buscar_ocorrencias_paginado", {
+      p_pagina: pagina, p_tamanho: tamanho,
+      p_prioridade: filtroPrioridade !== "todas" ? filtroPrioridade : null,
+      p_dia: filtroData.dia ? Number(filtroData.dia) : null,
+      p_mes: filtroData.mes ? Number(filtroData.mes) : null,
+      p_ano: filtroData.ano ? Number(filtroData.ano) : null,
+      p_origem: filtroOrigem || null,
+      p_destino: filtroDestino || null,
+      p_municipio: filtroMunicipio || null,
+      p_origem_ligacao: filtroOrigemLigacao || null,
+      p_tipo_viatura: filtroTipoViatura || null,
+      p_viatura: filtroViatura || null,
+      p_tipo_classificacao: filtroTipoClass || null,
+      p_motivo_classificacao: filtroMotivoClass || null,
+      p_categoria: filtroCategoria || null,
+      p_hora_inicio: horaInicio || null,
+      p_hora_fim: horaFim || null,
+      p_busca: buscaAtrasada || null,
+    });
+    if (error) return { lista: [], total: 0 };
+    return { lista: (data || []).map(ocorrenciaDoBanco), total: data?.[0]?.total_count || 0 };
+  };
+  const pesquisaGestao = usePaginacao({ ativo: aba === "pesquisa", dependencias: filtrosPesquisa, buscar: buscarPaginaGestao, tamanho: tamanhoPagina });
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
-      <div style={{ display: "flex", gap: 6, borderBottom: `1px solid ${COLORS.line}`, marginBottom: 2 }}>
-        {[
+      <TabBar
+        abas={[
           { key: "visao", label: "Visão Geral", icon: LayoutDashboard },
           { key: "indicadores", label: "Indicadores", icon: Gauge },
           { key: "pesquisa", label: "Pesquisa de ocorrências", icon: Search },
           { key: "funcionarios", label: "Cadastrar Funcionário", icon: UserPlus },
-        ].map((a) => {
-          const Icon = a.icon; const ativa = aba === a.key;
-          return (
-            <button key={a.key} onClick={() => setAba(a.key)} style={{ display: "flex", alignItems: "center", gap: 7, padding: "10px 15px", cursor: "pointer", background: "transparent", border: "none", borderBottom: ativa ? `2px solid ${COLORS.accent2}` : "2px solid transparent", color: ativa ? COLORS.text : COLORS.textFaint, fontFamily: FONT_DISPLAY, fontSize: 14, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 700 }}>
-              <Icon size={15} /> {a.label}
-            </button>
-          );
-        })}
-      </div>
+        ]}
+        ativa={aba}
+        onMudar={setAba}
+      />
 
       {aba === "visao" && (
         <>
@@ -1814,38 +1821,16 @@ function GestaoView({ ocorrencias, veiculos, onAbrir, usuarios, sessao, onCadast
               <option value="">Categoria especial</option>{CATEGORIAS_ESPECIAIS.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
             <span style={{ fontFamily: FONT_MONO, fontSize: 13, color: COLORS.accent2, marginLeft: "auto", fontWeight: 700 }}>
-              {carregandoPesquisa ? "Buscando..." : `${totalResultados} resultado(s)`}
+              {pesquisaGestao.carregando ? "Buscando..." : `${pesquisaGestao.total} resultado(s)`}
             </span>
           </div>
 
-          <div style={{ display: "grid", gap: 7, minHeight: 200 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "100px 1fr 110px 110px 140px", fontSize: 11.5, color: COLORS.textFaint, textTransform: "uppercase", padding: "0 10px", fontFamily: FONT_MONO, fontWeight: 700 }}>
-              <span>Nº controle</span><span>Queixa / endereço</span><span>Prioridade</span><span>Status</span><span>Abertura</span>
-            </div>
-            {listaFiltrada.map((oc) => (
-              <div key={oc.id} onClick={() => onAbrir(oc)} style={{ cursor: "pointer", display: "grid", gridTemplateColumns: "100px 1fr 110px 110px 140px", alignItems: "center", padding: "9px 10px", background: COLORS.panel2, borderRadius: 5, fontSize: 13.5 }}>
-                <span style={{ fontFamily: FONT_MONO, color: COLORS.textDim, fontWeight: 700 }}>{oc.numeroControle}</span>
-                <span>{oc.tarm.queixa} <span style={{ color: COLORS.textFaint }}>— {enderecoResumo(oc.tarm)}</span></span>
-                <PrioridadeChip cls={oc.regulacao?.classificacao} />
-                <StatusChip status={oc.status} />
-                <span style={{ fontFamily: FONT_MONO, color: COLORS.textFaint }}>{fmtDataHora(oc.criadoEm)}</span>
-              </div>
-            ))}
-            {!carregandoPesquisa && listaFiltrada.length === 0 && <div style={{ color: COLORS.textFaint, fontSize: 14, padding: 10 }}>Nenhuma ocorrência encontrada para os critérios pesquisados.</div>}
-          </div>
-
-          {totalResultados > tamanhoPagina && (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 14, paddingTop: 12, borderTop: `1px solid ${COLORS.line}` }}>
-              <Btn small kind="outline" disabled={pagina <= 1} onClick={() => setPagina((p) => Math.max(1, p - 1))}>Anterior</Btn>
-              <span style={{ fontSize: 13, color: COLORS.textDim, fontFamily: FONT_MONO }}>Página {pagina} de {totalPaginas}</span>
-              <Btn small kind="outline" disabled={pagina >= totalPaginas} onClick={() => setPagina((p) => Math.min(totalPaginas, p + 1))}>Próxima</Btn>
-            </div>
-          )}
+          <ResultadosPaginados {...pesquisaGestao} onAbrir={onAbrir} />
         </Panel>
       )}
 
       {aba === "funcionarios" && (
-        <FuncionariosPanel usuarios={usuarios} sessao={sessao} onCadastrar={onCadastrarFuncionario} onAtualizar={onAtualizarFuncionario} onDefinirAtivo={onDefinirAtivoFuncionario} />
+        <FuncionariosPanel sessao={sessao} onCadastrar={onCadastrarFuncionario} onAtualizar={onAtualizarFuncionario} onDefinirAtivo={onDefinirAtivoFuncionario} />
       )}
     </div>
   );
@@ -1900,7 +1885,6 @@ function mesclarVeiculo(lista, payload) {
 export default function App() {
   const [ocorrencias, setOcorrencias] = useState([]);
   const [veiculos, setVeiculos] = useState([]);
-  const [usuarios, setUsuarios] = useState([]);
   const [sessao, setSessao] = useState(null);
   const [modoRecuperacao, setModoRecuperacao] = useState(false);
   const [verificandoSessao, setVerificandoSessao] = useState(true);
@@ -1957,11 +1941,6 @@ export default function App() {
     if (error) { setErroConexao(true); return; }
     setVeiculos((data || []).map(veiculoDoBanco));
   }
-  async function recarregarUsuarios() {
-    const { data, error } = await supabase.from("perfis").select("*").order("nome");
-    if (error) { notificar("Erro ao carregar funcionários: " + error.message); return; }
-    setUsuarios(data || []);
-  }
 
   useEffect(() => {
     if (!sessao) return;
@@ -1984,8 +1963,6 @@ export default function App() {
 
     return () => { supabase.removeChannel(canal); };
   }, [sessao?.id]);
-
-  useEffect(() => { if (sessao?.papel === "gestao" || sessao?.papel === "admin") recarregarUsuarios(); }, [sessao]);
 
   /* ---- Ocorrências: TARM ---- */
   async function criarOcorrencia(dadosTarm) {
@@ -2218,20 +2195,17 @@ export default function App() {
     const { data, error } = await supabase.functions.invoke("criar-funcionario", { body: dados });
     if (error || data?.error) { notificar("Erro ao cadastrar funcionário: " + (data?.error || error.message)); return; }
     notificar(`Funcionário "${dados.nome}" cadastrado com sucesso.`);
-    recarregarUsuarios();
   }
   async function atualizarFuncionario(id, dados) {
     const { error } = await supabase.from("perfis").update({ nome: dados.nome, cpf: dados.cpf, papel: dados.papel }).eq("id", id);
     if (error) { notificar("Erro ao atualizar cadastro: " + error.message); return; }
     notificar("Cadastro atualizado.");
-    recarregarUsuarios();
   }
   async function definirAtivoFuncionario(id, ativo, papelAnterior) {
     const novoPapel = ativo ? (papelAnterior === "inativo" ? "tarm" : papelAnterior) : "inativo";
     const { error } = await supabase.from("perfis").update({ papel: novoPapel }).eq("id", id);
     if (error) { notificar("Erro ao atualizar acesso: " + error.message); return; }
     notificar(ativo ? "Acesso reativado — ajuste a função se necessário." : "Acesso desativado.");
-    recarregarUsuarios();
   }
 
   if (modoRecuperacao) return <LoginScreen modoRecuperacao />;
@@ -2328,7 +2302,7 @@ export default function App() {
           {papelEfetivo === "tarm" && <TarmView ocorrencias={ocorrencias} onNovaOcorrencia={criarOcorrencia} onCancelarOcorrencia={cancelarOcorrencia} now={now} />}
           {papelEfetivo === "regulacao" && <RegulacaoView ocorrencias={ocorrencias} sessao={sessao} onRegular={regular} onAbrir={setModalOc} onContraRegulacao={contraRegular} onAlterarClassificacao={alterarClassificacao} onAlterarViatura={alterarViatura} onAdicionarInfoComplementar={adicionarInfoComplementar} onCancelarRegulada={cancelarRegulada} onDefinirUnidadeDestino={definirUnidadeDestino} />}
           {papelEfetivo === "frota" && <FrotaView ocorrencias={ocorrencias} veiculos={veiculos} onDespachar={despachar} onMarcarTempo={marcarTempo} onAbrir={setModalOc} onAddVeiculo={adicionarVeiculo} onRemoveVeiculo={removerVeiculo} onUpdateVeiculo={atualizarVeiculo} onToggleStatus={alternarStatusVeiculo} onTrocarViatura={trocarViatura} onAdicionarViaturaExtra={adicionarViaturaExtra} onRemoverViaturaOcorrencia={removerViaturaDaOcorrencia} onCancelarOcorrenciaFrota={cancelarOcorrenciaFrota} onEncerrarOcorrencia={encerrarOcorrencia} onLiberarViatura={liberarViatura} />}
-          {papelEfetivo === "gestao" && <GestaoView ocorrencias={ocorrencias} veiculos={veiculos} onAbrir={setModalOc} usuarios={usuarios} sessao={sessao} onCadastrarFuncionario={cadastrarFuncionario} onAtualizarFuncionario={atualizarFuncionario} onDefinirAtivoFuncionario={definirAtivoFuncionario} onRecarregarFuncionarios={recarregarUsuarios} />}
+          {papelEfetivo === "gestao" && <GestaoView ocorrencias={ocorrencias} veiculos={veiculos} onAbrir={setModalOc} sessao={sessao} onCadastrarFuncionario={cadastrarFuncionario} onAtualizarFuncionario={atualizarFuncionario} onDefinirAtivoFuncionario={definirAtivoFuncionario} />}
         </div>
       </div>
 
